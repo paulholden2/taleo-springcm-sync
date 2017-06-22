@@ -26,6 +26,7 @@
   "license": "UNLICENSED",
   "homepage": "https://bitbucket.org/paulholden/taleo-springcm-sync#readme",
   "dependencies": {
-    "taleo-nodejs-sdk": "^0.1.0"
+    "async": "^2.4.1",
+    "taleo-nodejs-sdk": "^0.1.2"
   }
 }
