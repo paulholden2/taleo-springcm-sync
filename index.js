@@ -1,4 +1,5 @@
 const fs = require('fs');
+// Require local library version, these other libraries aren't stable yet
 const Taleo = require('../taleo-nodejs-sdk');
 const SpringCM = require('../springcm-nodejs-sdk');
 const async = require('async');
