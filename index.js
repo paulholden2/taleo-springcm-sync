@@ -1,61 +1,125 @@
-const Taleo = require('taleo-nodejs-sdk');
+const fs = require('fs');
+const Taleo = require('../taleo-nodejs-sdk');
+const SpringCM = require('../springcm-nodejs-sdk');
 const async = require('async');
 
-Taleo.dispatcher.serviceURL((err, url) => {
-	Taleo.employee.pages(100, (err, pages) => {
-		if (err) {
-			return console.log(err);
-		}
+function iterateEmployees(employees, callback) {
+	async.eachSeries(employees, (emp, next) => {
+		Taleo.employee.packets(emp, (err, packets) => {
+			if (err) {
+				console.log(err);
+				return next(null);
+			}
 
-		pages.forEach((page) => {
-			page.read((err, employees) => {
+			console.log(`${emp.id} ${emp.firstName} ${emp.lastName}`);
+
+			SpringCM.folder.get(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}`, (err, fld) => {
 				if (err) {
-					return console.log(err);
+					console.log(err);
+					return next(null);
 				}
 
-				async.eachSeries(employees, (emp, next) => {
-					Taleo.employee.packets(emp, (err, packets) => {
-						if (err) {
-							return console.log(err);
-						}
+				async.eachSeries(packets, (packet, next) => {
+					Taleo.packet.activities(packet, (err, activities) => {
+						async.eachSeries(activities, (actv, next) => {
+							var docname = `${actv.id} ${actv.title}.pdf`;
 
-						console.log(`${emp.id} ${emp.firstName} ${emp.lastName}`);
+							if (!actv.signed()) {
+								console.log(`Skipping ${actv.id}, not complete`);
+								return next(null);
+							}
 
-						async.eachSeries(packets, (pkt, next) => {
-							Taleo.packet.activities(pkt, (err, activities) => {
-								if (err) {
-									return console.log(err);
-								}
+							SpringCM.document.path(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`, (err, doc) => {
+								if (!doc) {
+									Taleo.activity.download(actv, `${__dirname}/${docname}`, (err) => {
+										if (err) {
+											console.log(err);
+											next(null);
+										} else {
+											SpringCM.folder.upload(fld, `${__dirname}/${docname}`, null, (err) => {
+												if (err) {
+													console.log(err);
+												} else {
+													console.log(`Uploaded /Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`);
+													fs.unlinkSync(`${__dirname}/${docname}`);
+												}
 
-								async.eachSeries(activities, (actv, next) => {
-									var path = __dirname + '/' + actv.id + ' ' + actv.title + '.pdf';
-
-									console.log('Downloading: ' + path);
-
-									next(null);
-									/*
-									Taleo.activity.download(actv, path, (err) => {
-										if (!err) {
-											console.log('Complete');
+												next(null);
+											});
 										}
-
-										next(err);
 									});
-									*/
-								}, (err) => {
-									next(err);
-								});
+								} else {
+									console.log(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname} already exists`);
+									next(null);
+								}
 							});
 						}, (err) => {
 							next(err);
 						});
 					});
 				}, (err) => {
-					if (err) {
-						return console.log(err.message);
-					}
+					next(err);
 				});
 			});
 		});
+	}, (err) => {
+		if (err) {
+			console.log(err);
+		} else {
+			callback(null);
+		}
 	});
+}
+
+function iteratePages(pages, callback) {
+	async.eachSeries(pages, (page) => {
+		page.read((err, employees) => {
+			iterateEmployees(employees, callback);
+		});
+	}, (err) => {
+		if (err) {
+			console.log(err);
+		} else {
+			callback(null);
+		}
+	});
+}
+
+async.waterfall([
+	// SpringCM auth
+	(callback) => {
+		SpringCM.auth.uatna11(process.env.SPRINGCM_CLIENT_ID, process.env.SPRINGCM_CLIENT_SECRET, (err, token) => {
+			callback(err);
+		});
+	},
+	// Taleo dispatcher service
+	(callback) => {
+		Taleo.dispatcher.serviceURL((err, url) => {
+			callback(err);
+		});
+	},
+	// Get employee pages
+	(callback) => {
+		Taleo.employee.pages(100, (err, pages) => {
+			callback(err, pages);
+		});
+	},
+	// Iterate through pages
+	(pages, callback) => {
+		iteratePages(pages, (err) => {
+			if (err) {
+				callback(err);
+			} else {
+				console.log('Completed employee page');
+			}
+		});
+	}
+], (err) => {
+	if (err) {
+		console.log(err);
+		process.exit(1);
+	} else {
+		console.log('done');
+		process.exit(0);
+	}
 });
