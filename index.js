@@ -6,60 +6,62 @@ const async = require('async');
 
 function iterateEmployees(employees, callback) {
 	async.eachSeries(employees, (emp, next) => {
-		Taleo.employee.packets(emp, (err, packets) => {
-			if (err) {
-				console.log(err);
-				return next(null);
-			}
-
-			console.log(`${emp.id} ${emp.firstName} ${emp.lastName}`);
-
-			SpringCM.folder.get(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}`, (err, fld) => {
+		Taleo.employee.location(emp, (err, loc) => {
+			Taleo.employee.packets(emp, (err, packets) => {
 				if (err) {
 					console.log(err);
 					return next(null);
 				}
 
-				async.eachSeries(packets, (packet, next) => {
-					Taleo.packet.activities(packet, (err, activities) => {
-						async.eachSeries(activities, (actv, next) => {
-							var docname = `${actv.id} ${actv.title}.pdf`;
+				console.log(`${emp.id} ${emp.firstName} ${emp.lastName}` + (loc ? ` - ${loc.city}` : ' - Unknown Location'));
 
-							if (!actv.signed()) {
-								console.log(`Skipping ${actv.id}, not complete`);
-								return next(null);
-							}
+				SpringCM.folder.get(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}`, (err, fld) => {
+					if (err) {
+						console.log(err);
+						return next(null);
+					}
 
-							SpringCM.document.path(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`, (err, doc) => {
-								if (!doc) {
-									Taleo.activity.download(actv, `${__dirname}/${docname}`, (err) => {
-										if (err) {
-											console.log(err);
-											next(null);
-										} else {
-											SpringCM.folder.upload(fld, `${__dirname}/${docname}`, null, (err) => {
-												if (err) {
-													console.log(err);
-												} else {
-													console.log(`Uploaded /Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`);
-													fs.unlinkSync(`${__dirname}/${docname}`);
-												}
+					async.eachSeries(packets, (packet, next) => {
+						Taleo.packet.activities(packet, (err, activities) => {
+							async.eachSeries(activities, (actv, next) => {
+								var docname = `${actv.id} ${actv.title}.pdf`;
 
-												next(null);
-											});
-										}
-									});
-								} else {
-									console.log(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname} already exists`);
-									next(null);
+								if (!actv.signed()) {
+									console.log(`Skipping ${actv.id}, not complete`);
+									return next(null);
 								}
+
+								SpringCM.document.path(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`, (err, doc) => {
+									if (!doc) {
+										Taleo.activity.download(actv, `${__dirname}/${docname}`, (err) => {
+											if (err) {
+												console.log(err);
+												next(null);
+											} else {
+												SpringCM.folder.upload(fld, `${__dirname}/${docname}`, null, (err) => {
+													if (err) {
+														console.log(err);
+													} else {
+														console.log(`Uploaded /Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`);
+														fs.unlinkSync(`${__dirname}/${docname}`);
+													}
+
+													next(null);
+												});
+											}
+										});
+									} else {
+										console.log(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname} already exists`);
+										next(null);
+									}
+								});
+							}, (err) => {
+								next(err);
 							});
-						}, (err) => {
-							next(err);
 						});
+					}, (err) => {
+						next(err);
 					});
-				}, (err) => {
-					next(err);
 				});
 			});
 		});
@@ -73,9 +75,11 @@ function iterateEmployees(employees, callback) {
 }
 
 function iteratePages(pages, callback) {
-	async.eachSeries(pages, (page) => {
+	async.eachSeries(pages, (page, next) => {
 		page.read((err, employees) => {
-			iterateEmployees(employees, callback);
+			iterateEmployees(employees, (err) => {
+				next(null);
+			});
 		});
 	}, (err) => {
 		if (err) {
