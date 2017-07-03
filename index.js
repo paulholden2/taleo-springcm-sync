@@ -4,64 +4,78 @@ const Taleo = require('../taleo-nodejs-sdk');
 const SpringCM = require('../springcm-nodejs-sdk');
 const async = require('async');
 
+var locations = {};
+
+function getLocations(callback) {
+	Taleo.location.all((err, locs) => {
+		if (err) {
+			return callbac(err);
+		}
+
+		locs.forEach((loc) => {
+			locations[loc.id] = loc;
+		});
+
+		callback(null);
+	});
+}
+
 function iterateEmployees(employees, callback) {
 	async.eachSeries(employees, (emp, next) => {
-		Taleo.employee.location(emp, (err, loc) => {
-			Taleo.employee.packets(emp, (err, packets) => {
+		Taleo.employee.packets(emp, (err, packets) => {
+			if (err) {
+				console.log(err);
+				return next(null);
+			}
+
+			console.log(`${emp.id} ${emp.firstName} ${emp.lastName}` + (emp.location ? ` - ${locations[emp.location].city}` : ' - Unknown Location'));
+
+			SpringCM.folder.get(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}`, (err, fld) => {
 				if (err) {
 					console.log(err);
 					return next(null);
 				}
 
-				console.log(`${emp.id} ${emp.firstName} ${emp.lastName}` + (loc ? ` - ${loc.city}` : ' - Unknown Location'));
+				async.eachSeries(packets, (packet, next) => {
+					Taleo.packet.activities(packet, (err, activities) => {
+						async.eachSeries(activities, (actv, next) => {
+							var docname = `${actv.id} ${actv.title}.pdf`;
 
-				SpringCM.folder.get(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}`, (err, fld) => {
-					if (err) {
-						console.log(err);
-						return next(null);
-					}
+							if (!actv.signed()) {
+								console.log(`Skipping ${actv.id}, not complete`);
+								return next(null);
+							}
 
-					async.eachSeries(packets, (packet, next) => {
-						Taleo.packet.activities(packet, (err, activities) => {
-							async.eachSeries(activities, (actv, next) => {
-								var docname = `${actv.id} ${actv.title}.pdf`;
+							SpringCM.document.path(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`, (err, doc) => {
+								if (!doc) {
+									Taleo.activity.download(actv, `${__dirname}/${docname}`, (err) => {
+										if (err) {
+											console.log(err);
+											next(null);
+										} else {
+											SpringCM.folder.upload(fld, `${__dirname}/${docname}`, null, (err) => {
+												if (err) {
+													console.log(err);
+												} else {
+													console.log(`Uploaded /Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`);
+													fs.unlinkSync(`${__dirname}/${docname}`);
+												}
 
-								if (!actv.signed()) {
-									console.log(`Skipping ${actv.id}, not complete`);
-									return next(null);
-								}
-
-								SpringCM.document.path(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`, (err, doc) => {
-									if (!doc) {
-										Taleo.activity.download(actv, `${__dirname}/${docname}`, (err) => {
-											if (err) {
-												console.log(err);
 												next(null);
-											} else {
-												SpringCM.folder.upload(fld, `${__dirname}/${docname}`, null, (err) => {
-													if (err) {
-														console.log(err);
-													} else {
-														console.log(`Uploaded /Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname}`);
-														fs.unlinkSync(`${__dirname}/${docname}`);
-													}
-
-													next(null);
-												});
-											}
-										});
-									} else {
-										console.log(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname} already exists`);
-										next(null);
-									}
-								});
-							}, (err) => {
-								next(err);
+											});
+										}
+									});
+								} else {
+									console.log(`/Taleo Packet Uploads/${emp.id} ${emp.firstName} ${emp.lastName}/${docname} already exists`);
+									next(null);
+								}
 							});
+						}, (err) => {
+							next(err);
 						});
-					}, (err) => {
-						next(err);
 					});
+				}, (err) => {
+					next(err);
 				});
 			});
 		});
@@ -102,6 +116,9 @@ async.waterfall([
 		Taleo.dispatcher.serviceURL((err, url) => {
 			callback(err);
 		});
+	},
+	(callback) => {
+		getLocations(callback);
 	},
 	// Get employee pages
 	(callback) => {
