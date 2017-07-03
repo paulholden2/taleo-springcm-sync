@@ -1,7 +1,7 @@
 const os = require('os');
 const child = require('child_process');
 // Require local library version, these other libraries aren't stable yet
-const Taleo = require('../taleo-nodejs-sdk');
+const Taleo = require('taleo-nodejs-sdk');
 const async = require('async');
 
 var locationLookup = {};

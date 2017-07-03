@@ -1,7 +1,7 @@
 const fs = require('fs');
 const async = require('async');
-const Taleo = require('../taleo-nodejs-sdk');
-const SpringCM = require('../springcm-nodejs-sdk');
+const Taleo = require('taleo-nodejs-sdk');
+const SpringCM = require('springcm-nodejs-sdk');
 
 const tag = `[${process.pid}] `;
 
