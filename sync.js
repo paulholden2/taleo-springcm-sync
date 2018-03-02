@@ -1,9 +1,11 @@
 const fs = require('fs');
 const async = require('async');
 const Taleo = require('taleo-nodejs-sdk');
-const SpringCM = require('springcm-nodejs-sdk');
+const SpringCM = require('springcm-node-sdk');
 
 const tag = `[${process.pid}] `;
+
+const dest = '/PMH/Alta Hospitals/Human Resources/Foothills/_Admin/Stria Deliveries/';
 
 function iterateActivities(employeeLookup, locationLookup, folder, activities, callback) {
 	async.eachSeries(activities, (actv, next) => {
@@ -11,7 +13,7 @@ function iterateActivities(employeeLookup, locationLookup, folder, activities, c
 		var loc = emp.location && locationLookup[emp.location];
 		var docname = `${emp.id} ${emp.firstName} ${emp.lastName} - ${actv.id} ${actv.title}.pdf`;
 
-		SpringCM.document.path(`/Taleo Packet Uploads/${docname}`, (err, doc) => {
+		SpringCM.document.path(`${dest}${docname}`, (err, doc) => {
 			if (!doc) {
 				Taleo.activity.download(actv, `${__dirname}/${docname}`, (err) => {
 					if (err) {
@@ -22,7 +24,7 @@ function iterateActivities(employeeLookup, locationLookup, folder, activities, c
 							if (err) {
 								console.log(tag + err);
 							} else {
-								console.log(tag + `Uploaded: /Taleo Packet Uploads/${docname}`);
+								console.log(tag + `Uploaded: ${dest}${docname}`);
 								fs.unlinkSync(`${__dirname}/${docname}`);
 							}
 
@@ -31,7 +33,7 @@ function iterateActivities(employeeLookup, locationLookup, folder, activities, c
 					}
 				});
 			} else {
-				console.log(tag + `Already exists: /Taleo Packet Uploads/${docname}`);
+				console.log(tag + `Already exists: ${dest}/${docname}`);
 				next(null);
 			}
 		});
@@ -60,12 +62,12 @@ process.on('message', (msg) => {
 		},
 		// SpringCM auth
 		(callback) => {
-			SpringCM.auth.uatna11(process.env.SPRINGCM_CLIENT_ID, process.env.SPRINGCM_CLIENT_SECRET, (err, token) => {
+			SpringCM.auth.login('uatna11', process.env.SPRINGCM_CLIENT_ID, process.env.SPRINGCM_CLIENT_SECRET, (err, token) => {
 				callback(err);
 			});
 		},
 		(callback) => {
-			SpringCM.folder.get('/Taleo Packet Uploads', (err, fld) => {
+			SpringCM.folder.get(`${dest}`, (err, fld) => {
 				folder = fld;
 				callback(err);
 			});
@@ -91,6 +93,11 @@ process.on('message', (msg) => {
 		}
 	], (err) => {
 		process.send(err);
+
+		if (err) {
+			console.log(err);
+		}
+
 		process.exit(err ? 1 : 0);
 	});
 });
