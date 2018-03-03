@@ -1,5 +1,6 @@
 const fs = require('fs');
 const os = require('os');
+const orm = require('./orm.js');
 const child = require('child_process');
 const async = require('async');
 // Require local library version, these other libraries aren't stable yet
@@ -39,6 +40,10 @@ const locationInfo = [
 		locationIds: [ 43 ]
 	},
 	{
+		name: 'Foothill',
+		locationIds: [ 1 ]
+	},
+	{
 		name: 'Hollywood',
 		locationIds: [ 41 ]
 	},
@@ -57,8 +62,19 @@ const locationInfo = [
 ];
 
 const validLocations = [].concat.apply([], locationInfo.map(loc => loc.locationIds));
+var seq;
 
 async.waterfall([
+	(callback) => {
+		orm.initialize('caas-rds.cw0pqculnfgu.us-east-1.rds.amazonaws.com', 'taleo', 'taleo', 'RA3FrBb29n4PfRTDfW', (err, inst) => {
+			if (err) {
+				return callback(err);
+			}
+
+			seq = inst;
+			callback();
+		});
+	},
 	(callback) => {
 		console.log('Logging into SpringCM');
 
@@ -109,17 +125,25 @@ async.waterfall([
 	},
 	// Get locations (also creates location lookup)
 	(callback) => {
+		console.log('Getting locations in Taleo to build lookup');
+
 		getLocations(callback);
 	},
 	// Get employee pages
 	(callback) => {
-		Taleo.employee.pages(200, (err, pages) => {
+		const n = 200;
+
+		console.log('Pulling employee list in pages of ' + n);
+
+		Taleo.employee.pages(n, (err, pages) => {
 			callback(err, pages);
 		});
 	},
 	// Combine pages into a single list of employees
 	(pages, callback) => {
 		var employees = [];
+
+		console.log(`Compiling list of employees from ${pages.length} pages`);
 
 		// Compile a list of all employees
 		async.eachSeries(pages, (page, next) => {
@@ -131,14 +155,18 @@ async.waterfall([
 			callback(err, employees);
 		});
 	},
-	// Filter out employees not from Foothill (location id: 1)
+	// Filter out unwanted (not in that way) employees
 	(employees, callback) => {
+		console.log(`Filtering in employees at designated locations from a total of ${employees.length}`);
+
 		callback(null, employees.filter((emp) => {
 			return validLocations.indexOf(emp.location) > -1;
 		}));
 	},
 	// Create employee lookup
 	(employees, callback) => {
+		console.log(`Generating employee ID -> employee lookup for ${employees.length} employees`);
+
 		employees.forEach((emp) => {
 			employeeLookup[emp.id] = emp;
 		});
@@ -147,6 +175,8 @@ async.waterfall([
 	},
 	// Get a list of activities for all packets for each employee
 	(employees, callback) => {
+		console.log('Compiling list of employee activities');
+
 		var out = fs.createWriteStream('./out.csv');
 
 		// Map each employee to an array of activities
@@ -196,12 +226,44 @@ async.waterfall([
 			}
 		});
 
-		console.log(`${activities.length} total activities to sync to SpringCM`);
+		console.log(`${activities.length} total activities found in Taleo`);
 
 		callback(null, activities);
 	},
+	(activities, callback) => {
+		const lim = 10;
+
+		async.filterLimit(activities, lim, (activity, callback) => {
+			seq.models.export.findOne({
+				where: {
+					'activity': activity.id
+				}
+			}).catch(callback).then((row) => {
+				if (row) {
+					callback(null, false);
+				} else {
+					callback(null, true);
+				}
+			});
+		}, (err, results) => {
+			if (err) {
+				return callback(err);
+			}
+
+			console.log(`${results.length} total activities to sync to SpringCM`);
+
+			// Pass results to load activities into SpringCM
+			// Pass empty array for testing
+			callback(null, []);
+		});
+	},
 	// Assign child processes a portion of the activities to sync to SpringCM
 	(activities, callback) => {
+		if (activities.length === 0) {
+			console.log('No activities to upload');
+			return callback();
+		}
+
 		// CPU count
 		var cpus = os.cpus().length;
 		// Pages per process. Splice at this index
@@ -244,4 +306,6 @@ async.waterfall([
 		console.log(err);
 		process.exit(1);
 	}
+
+	process.exit(0);
 });
