@@ -2,15 +2,34 @@ const fs = require('fs');
 const os = require('os');
 const orm = require('./orm.js');
 const child = require('child_process');
+const moment = require('moment');
 const async = require('async');
 // Require local library version, these other libraries aren't stable yet
 const Taleo = require('taleo-nodejs-sdk');
 const SpringCM = require('springcm-node-sdk');
 const csvjson = require('csvjson');
 
+// Array of child process IDs
+var pids = [];
 var ssnLookup = {};
 var locationLookup = {};
 var employeeLookup = {};
+var logfile = fs.createWriteStream(moment().format('YYYY-MM-DD HH.mm.ss') + '.log');
+
+function log(msg) {
+	console.log(msg);
+	logfile.write(msg + '\n');
+}
+
+function getLocationName(id) {
+	for (var i = 0; i < locationInfo.length; ++i) {
+		if (locationInfo[i].locationIds.indexOf(id) > -1) {
+			return `/PMH/Alta Hospitals/Human Resources/${locationInfo[i].name}/_Admin/Stria Deliveries`
+		}
+	}
+
+	return null;
+}
 
 function getLocations(callback) {
 	Taleo.location.all((err, locs) => {
@@ -76,14 +95,14 @@ async.waterfall([
 		});
 	},
 	(callback) => {
-		console.log('Logging into SpringCM');
+		log('Logging into SpringCM');
 
 		SpringCM.auth.login('uatna11', process.env.SPRINGCM_CLIENT_ID, process.env.SPRINGCM_CLIENT_SECRET, (err, token) => {
 			callback(err);
 		});
 	},
 	(callback) => {
-		console.log('Locating employee lookup');
+		log('Locating employee lookup');
 
 		SpringCM.document.path('/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv', (err, doc) => {
 			if (err) {
@@ -94,7 +113,7 @@ async.waterfall([
 		});
 	},
 	(doc, callback) => {
-		console.log('Downloading employee lookup');
+		log('Downloading employee lookup');
 
 		var ws = fs.createWriteStream('./lookup.csv');
 
@@ -125,25 +144,25 @@ async.waterfall([
 	},
 	// Get locations (also creates location lookup)
 	(callback) => {
-		console.log('Getting locations in Taleo to build lookup');
+		log('Getting locations in Taleo to build lookup');
 
 		getLocations(callback);
 	},
 	// Get employee pages
 	(callback) => {
-		const n = 200;
+		const n = 50;
 
-		console.log('Pulling employee list in pages of ' + n);
+		log('Pulling employee list in pages of ' + n);
 
 		Taleo.employee.pages(n, (err, pages) => {
-			callback(err, pages);
+			callback(err, pages.slice(-1));
 		});
 	},
 	// Combine pages into a single list of employees
 	(pages, callback) => {
 		var employees = [];
 
-		console.log(`Compiling list of employees from ${pages.length} pages`);
+		log(`Compiling list of employees from ${pages.length} pages`);
 
 		// Compile a list of all employees
 		async.eachSeries(pages, (page, next) => {
@@ -157,7 +176,7 @@ async.waterfall([
 	},
 	// Filter out unwanted (not in that way) employees
 	(employees, callback) => {
-		console.log(`Filtering in employees at designated locations from a total of ${employees.length}`);
+		log(`Filtering in employees at designated locations from a total of ${employees.length}`);
 
 		callback(null, employees.filter((emp) => {
 			return validLocations.indexOf(emp.location) > -1;
@@ -165,7 +184,7 @@ async.waterfall([
 	},
 	// Create employee lookup
 	(employees, callback) => {
-		console.log(`Generating employee ID -> employee lookup for ${employees.length} employees`);
+		log(`Generating employee ID -> employee lookup for ${employees.length} employees`);
 
 		employees.forEach((emp) => {
 			employeeLookup[emp.id] = emp;
@@ -175,7 +194,7 @@ async.waterfall([
 	},
 	// Get a list of activities for all packets for each employee
 	(employees, callback) => {
-		console.log('Compiling list of employee activities');
+		log('Compiling list of employee activities');
 
 		var out = fs.createWriteStream('./out.csv');
 
@@ -184,27 +203,37 @@ async.waterfall([
 			Taleo.employee.packets(employee, (err, packets) => {
 				// List of signed activities for this employee
 				var activities = [];
+				var exceptions = [];
 
 				async.eachSeries(packets, (packet, next) => {
 					Taleo.packet.activities(packet, (err, res) => {
 						// Filter out unsigned/incomplete activity forms
 						res.forEach((actv) => {
-							if (Taleo.activity.signed(actv)) {
-								activities.push(actv);
-							}
+							if (actv.href.download) {
+								if (ssnLookup.hasOwnProperty(employee.ssn.replace('-', ''))) {
+									var emp = ssnLookup[employee.ssn.replace('-', '')];
 
-							if (ssnLookup.hasOwnProperty(employee.ssn.replace('-', ''))) {
-								var emp = ssnLookup[employee.ssn.replace('-', '')];
-								out.write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title}.pdf","${emp['Clock Number']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '')}"\r\n`);
+									actv.destinationPath = getLocationName(employee.location);
+									actv.isException = 0;
+									activities.push(actv);
+									out.write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title}.pdf","${emp['Clock Number']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '')}"\r\n`);
+								} else {
+									actv.destinationPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Taleo Sync/Exceptions';
+									actv.isException = 1;
+									exceptions.push(actv);
+								}
 							}
 						});
 
-						console.log(`${activities.length} form${activities.length === 1 ? '' : 's'} in ${packets.length} packet${packets.length === 1 ? '' : 's'} found for ${employee.id} - ${employee.firstName} ${employee.lastName}`);
+						log(`${activities.length} form${activities.length === 1 ? '' : 's'} in ${packets.length} packet${packets.length === 1 ? '' : 's'} found for ${employee.id} - ${employee.firstName} ${employee.lastName}`);
 
 						next(err);
 					});
 				}, (err) => {
-					callback(err, activities);
+					callback(err, {
+						activities: activities,
+						exceptions: exceptions
+					});
 				});
 			});
 		}, (err, lists) => {
@@ -216,19 +245,26 @@ async.waterfall([
 	// Flatten the 2D array of activities
 	(lists, callback) => {
 		var activities = [];
+		var exceptions = [];
 
 		lists.forEach((list) => {
 			// May be undefined if employee had no packets
 			if (list) {
-				list.forEach((item) => {
+				list.activities.forEach((item) => {
 					activities = activities.concat(item);
+				});
+
+				list.exceptions.forEach((item) => {
+					exceptions = exceptions.concat(item);
 				});
 			}
 		});
 
-		console.log(`${activities.length} total activities found in Taleo`);
+		log(`${activities.length} activities found in Taleo`);
+		log(`${exceptions.length} exceptions`);
+		log(`${exceptions.length + activities.length} total`);
 
-		callback(null, activities);
+		callback(null, activities.concat(exceptions));
 	},
 	(activities, callback) => {
 		const lim = 10;
@@ -250,17 +286,17 @@ async.waterfall([
 				return callback(err);
 			}
 
-			console.log(`${results.length} total activities to sync to SpringCM`);
+			log(`${results.length} total activities to sync to SpringCM`);
 
 			// Pass results to load activities into SpringCM
 			// Pass empty array for testing
-			callback(null, []);
+			callback(null, results);
 		});
 	},
 	// Assign child processes a portion of the activities to sync to SpringCM
 	(activities, callback) => {
 		if (activities.length === 0) {
-			console.log('No activities to upload');
+			log('No activities to upload');
 			return callback();
 		}
 
@@ -269,9 +305,9 @@ async.waterfall([
 		// Pages per process. Splice at this index
 		var per = Math.ceil(activities.length / cpus);
 
-		console.log(`${cpus} CPUs`);
-		console.log(`${activities.length} activities`);
-		console.log(`${per} activities per process`);
+		log(`${cpus} CPUs`);
+		log(`${activities.length} activities`);
+		log(`${per} activities per process`);
 
 		// Split up activities to upload amongst processes
 		for (var i = 0; i < cpus; ++i) {
@@ -286,26 +322,45 @@ async.waterfall([
 			// 20 max Taleo tokens, reserve one
 			var allowance = Math.floor(19 / cpus);
 
+			pids.push(cpid);
+
 			var from = i * per;
 			var to = Math.min((i + 1) * per - 1, activities.length - 1);
 
-			console.log(`Spawned child process ${cpid}, assigning ` + (from === to ? `activity ${from}` : `activities ${from} - ${to} (${to - from + 1} total)`));
+			log(`Spawned child process ${cpid}, assigning ` + (from === to ? `activity ${from}` : `activities ${from} - ${to} (${to - from + 1} total)`));
 			c.send(JSON.stringify({
 				allowance: allowance,
 				employeeLookup: employeeLookup,
 				locationLookup: locationLookup,
 				activities: activities.slice(from, to + 1)
 			}));
+
+			c.on('message', (msg) => {
+				if (msg.status === 'complete') {
+					log(`Child process ${msg.pid} completed work`);
+					var idx = pids.indexOf(msg.pid);
+
+					if (idx > -1) {
+						pids.splice(idx, 1);
+					}
+				} else if (msg.status === 'log') {
+					log(msg.log);
+				}
+			});
 		}
 
-		callback(null);
+		callback();
+	},
+	(callback) => {
+		async.until(() => pids.length === 0, callback => setTimeout(callback, 1000), err => callback(err));
 	}
 ], (err) => {
-	// TODO: Upload log file
 	if (err) {
-		console.log(err);
-		process.exit(1);
+		log(err);
 	}
 
-	process.exit(0);
+	logfile.end();
+	// TODO: Upload log file
+
+	process.exit(err ? 1 : 0);
 });

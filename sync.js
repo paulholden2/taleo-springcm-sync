@@ -1,39 +1,87 @@
 const fs = require('fs');
+const path = require('path');
 const async = require('async');
 const Taleo = require('taleo-nodejs-sdk');
 const SpringCM = require('springcm-node-sdk');
+const orm = require('./orm.js');
+const PDFParser = require('pdf2json');
 
 const tag = `[${process.pid}] `;
 
 const dest = '/PMH/Alta Hospitals/Human Resources/Foothills/_Admin/Stria Deliveries/';
 
-function iterateActivities(employeeLookup, locationLookup, folder, activities, callback) {
+function plog(msg) {
+	process.send({
+		status: 'log',
+		log: msg
+	});
+}
+
+function iterateActivities(sequelize, employeeLookup, locationLookup, activities, callback) {
 	async.eachSeries(activities, (actv, next) => {
 		var emp = employeeLookup[actv.employeeID];
 		var loc = emp.location && locationLookup[emp.location];
-		var docname = `${emp.id} ${emp.firstName} ${emp.lastName} - ${actv.id} ${actv.title}.pdf`;
+		var docname = `${emp.id} ${emp.firstName} ${emp.lastName} - ${actv.id} ${actv.title.replace(/[\\\/:<>"|*]/g, '_')}.pdf`;
 
-		SpringCM.document.path(`${dest}${docname}`, (err, doc) => {
+		if (!actv.destinationPath) {
+			plog(tag + 'No destination path set for activity ' + actv.id);
+			return next();
+		}
+
+		var dest = path.join(actv.destinationPath, docname);
+
+		SpringCM.document.path(dest, (err, doc) => {
 			if (!doc) {
 				Taleo.activity.download(actv, `${__dirname}/${docname}`, (err) => {
 					if (err) {
-						console.log(tag + err);
-						next(null);
+						plog(`${tag} ${err.message}`);
+						next();
 					} else {
-						SpringCM.folder.upload(folder, `${__dirname}/${docname}`, null, (err) => {
-							if (err) {
-								console.log(tag + err);
-							} else {
-								console.log(tag + `Uploaded: ${dest}${docname}`);
-								fs.unlinkSync(`${__dirname}/${docname}`);
-							}
+						var pdfParser = new PDFParser();
 
-							next(null);
+						pdfParser.on('pdfParser_dataError', (err) => {
+							plog(`${tag} ${err.message}`);
+							next();
 						});
+
+						pdfParser.on('pdfParser_dataReady', (data) => {
+							SpringCM.folder.path(actv.destinationPath, (err, folder) => {
+								SpringCM.folder.upload(folder, fs.createReadStream(`${__dirname}/${docname}`), docname, null, (err) => {
+									if (err) {
+										plog(`${tag} ${err.message}`);
+										next(null);
+									} else {
+										var pages = data.formImage.Pages.length;
+
+										plog(tag + `Uploaded: ${dest}, ${pages} pages`);
+										fs.unlinkSync(`${__dirname}/${docname}`);
+										sequelize.models.export.create({
+											activity: actv.id,
+											activity_title: actv.title,
+											activity_id: actv.id,
+											employee_id: emp.id,
+											employee_name: `${emp.firstName} ${emp.lastName}`,
+											page_count: pages,
+											exception_upload: actv.isException
+										}).catch(next).then(() => {
+											plog(tag + `Logged ${actv.id} in export database`);
+											next();
+										});
+									}
+								});
+							});
+						});
+
+						if (fs.existsSync(`${__dirname}/${docname}`)) {
+							pdfParser.loadPDF(`${__dirname}/${docname}`);
+						} else {
+							plog(`${tag} Unable to locate activity ${docname}, likely an error occurred during download`);
+							next();
+						}
 					}
 				});
 			} else {
-				console.log(tag + `Already exists: ${dest}/${docname}`);
+				plog(tag + `Already exists: ${dest}`);
 				next(null);
 			}
 		});
@@ -49,9 +97,8 @@ process.on('message', (msg) => {
 	var employeeLookup = msg.employeeLookup;
 	var activities = msg.activities;
 	var allowance = msg.allowance;
-	var folder = null;
 
-	console.log(tag + `Received ${activities.length} activities, allowance of ${allowance}`);
+	plog(tag + `Received ${activities.length} activities, allowance of ${allowance}`);
 
 	async.waterfall([
 		// Taleo dispatcher service
@@ -67,24 +114,27 @@ process.on('message', (msg) => {
 			});
 		},
 		(callback) => {
-			SpringCM.folder.get(`${dest}`, (err, fld) => {
-				folder = fld;
-				callback(err);
+			orm.initialize('caas-rds.cw0pqculnfgu.us-east-1.rds.amazonaws.com', 'taleo', 'taleo', 'RA3FrBb29n4PfRTDfW', (err, inst) => {
+				if (err) {
+					return callback(err);
+				}
+
+				callback(null, inst);
 			});
 		},
 		// Split activities to sync into 1 chunk per allowance
 		// Allowance is allocated such that the program never
 		// attempts to allocate more than 20 tokens from Taleo
-		(callback) => {
+		(sequelize, callback) => {
 			var len = Math.ceil(activities.length / allowance) + 1;
 
 			async.times(allowance, (n, next) => {
 				var from = n * len;
 				var to = Math.min(from + len, activities.length);
 
-				console.log(tag + `Section ${from} - ${to - 1}`);
+				plog(tag + `Section ${from} - ${to - 1}`);
 
-				iterateActivities(employeeLookup, locationLookup, folder, activities.slice(from, to), (err) => {
+				iterateActivities(sequelize, employeeLookup, locationLookup, activities.slice(from, to), (err) => {
 					next(err);
 				});
 			}, (err) => {
@@ -92,11 +142,14 @@ process.on('message', (msg) => {
 			});
 		}
 	], (err) => {
-		process.send(err);
-
 		if (err) {
-			console.log(err);
+			plog(err);
 		}
+
+		process.send({
+			pid: process.pid,
+			status: 'complete'
+		});
 
 		process.exit(err ? 1 : 0);
 	});

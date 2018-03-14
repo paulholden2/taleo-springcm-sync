@@ -8,10 +8,10 @@ module.exports = {
 			dialect: 'mssql',
 			timezone: 'America/Los_Angeles',
 			pool: {
-				max: 5,
-				min: 0,
+				max: 20,
+				min: 1,
 				acquire: 30000,
-				idle: 10000
+				idle: 30000
 			},
 			logging: false
 		});
@@ -23,7 +23,13 @@ module.exports = {
 				activity: {
 					type: Sequelize.INTEGER,
 					primaryKey: true
-				}
+				},
+				page_count: Sequelize.INTEGER,
+				activity_title: Sequelize.STRING(400),
+				employee_id: Sequelize.INTEGER,
+				activity_id: Sequelize.INTEGER,
+				employee_name: Sequelize.STRING(400),
+				exception_upload: Sequelize.INTEGER
 			});
 		}).then(() => {
 			sequelize.sync().then(() => {
