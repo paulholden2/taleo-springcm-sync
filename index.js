@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const os = require('os');
 const orm = require('./orm.js');
 const child = require('child_process');
@@ -14,17 +15,29 @@ var pids = [];
 var ssnLookup = {};
 var locationLookup = {};
 var employeeLookup = {};
-var logfile = fs.createWriteStream(moment().format('YYYY-MM-DD HH.mm.ss') + '.log');
+var logname = moment().format('YYYY-MM-DD HH.mm.ss') + '.log';
+var logfile = fs.createWriteStream(logname);
+var validCounts = {};
 
 function log(msg) {
 	console.log(msg);
 	logfile.write(msg + '\n');
 }
 
+function getLocationPath(id) {
+	for (var i = 0; i < locationInfo.length; ++i) {
+		if (locationInfo[i].locationIds.indexOf(id) > -1) {
+			return `/PMH/Alta Hospitals/Human Resources/${locationInfo[i].name}/_Admin/Stria Deliveries`;
+		}
+	}
+
+	return null;
+}
+
 function getLocationName(id) {
 	for (var i = 0; i < locationInfo.length; ++i) {
 		if (locationInfo[i].locationIds.indexOf(id) > -1) {
-			return `/PMH/Alta Hospitals/Human Resources/${locationInfo[i].name}/_Admin/Stria Deliveries`
+			return locationInfo[i].name;
 		}
 	}
 
@@ -59,7 +72,7 @@ const locationInfo = [
 		locationIds: [ 43 ]
 	},
 	{
-		name: 'Foothill',
+		name: 'Foothills',
 		locationIds: [ 1 ]
 	},
 	{
@@ -80,8 +93,16 @@ const locationInfo = [
 	}
 ];
 
+var lookupFiles = {};
+
 const validLocations = [].concat.apply([], locationInfo.map(loc => loc.locationIds));
 var seq;
+
+locationInfo.forEach(function (info) {
+	var loc = info.name;
+	lookupFiles[loc] = fs.createWriteStream(path.join(__dirname, loc + '.csv'));
+	validCounts[loc] = 0;
+});
 
 async.waterfall([
 	(callback) => {
@@ -155,7 +176,7 @@ async.waterfall([
 		log('Pulling employee list in pages of ' + n);
 
 		Taleo.employee.pages(n, (err, pages) => {
-			callback(err, pages.slice(-1));
+			callback(err, pages.slice(-2));
 		});
 	},
 	// Combine pages into a single list of employees
@@ -212,11 +233,20 @@ async.waterfall([
 							if (actv.href.download) {
 								if (ssnLookup.hasOwnProperty(employee.ssn.replace('-', ''))) {
 									var emp = ssnLookup[employee.ssn.replace('-', '')];
+									var loc = getLocationPath(employee.location);
+									var locName = getLocationName(employee.location);
 
-									actv.destinationPath = getLocationName(employee.location);
+									actv.destinationPath = loc;
 									actv.isException = 0;
 									activities.push(actv);
-									out.write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title}.pdf","${emp['Clock Number']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '')}"\r\n`);
+
+									validCounts[locName] += 1;
+
+									if (locName === 'Culver City') {
+										lookupFiles[locName].write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title.replace(/[\\\/]/g, '_')}.pdf","${emp['EMP ID']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '').replace(/[\\\/]/g, '_')}",""\r\n`);
+									} else {
+										lookupFiles[locName].write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title.replace(/[\\\/]/g, '_')}.pdf","${emp['EMP ID']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '').replace(/[\\\/]/g, '_')}"\r\n`);
+									}
 								} else {
 									actv.destinationPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Taleo Sync/Exceptions';
 									actv.isException = 1;
@@ -353,6 +383,45 @@ async.waterfall([
 	},
 	(callback) => {
 		async.until(() => pids.length === 0, callback => setTimeout(callback, 1000), err => callback(err));
+	},
+	(callback) => {
+		Object.keys(lookupFiles).forEach((key) => {
+			lookupFiles[key].end();
+		});
+
+		callback();
+	},
+	(callback) => {
+		// Upload load files
+		async.eachSeries(locationInfo, (info, callback) => {
+			if (validCounts[info.name] < 1) {
+				log('Skipping upload of ' + info.name + '.csv; no files uploaded');
+				return callback();
+			}
+
+			SpringCM.folder.path(`/PMH/Alta Hospitals/Human Resources/${info.name}/_Admin/Stria Deliveries`, (err, folder) => {
+				if (err) {
+					return callback(err);
+				}
+
+				SpringCM.folder.upload(folder, fs.createReadStream(path.join(__dirname, info.name + '.csv')), info.name + '.csv', null, (err) => {
+					if (err) {
+						log('Error while uploading load file ' + info.name + '.csv (might just be empty): ' + err);
+					} else {
+						log('Uploaded load file ' + info.name + '.csv');
+					}
+
+					fs.unlinkSync(path.join(__dirname, info.name + '.csv'));
+					callback();
+				});
+			});
+		}, (err) => {
+			if (err) {
+				return callback(err);
+			}
+
+			callback();
+		});
 	}
 ], (err) => {
 	if (err) {
@@ -360,7 +429,19 @@ async.waterfall([
 	}
 
 	logfile.end();
-	// TODO: Upload log file
 
-	process.exit(err ? 1 : 0);
+	SpringCM.folder.path('/PMH/Alta Hospitals/Human Resources/_Admin/Taleo Sync/Logs', (err, folder) => {
+		if (err) {
+			return console.log(err);
+		}
+
+		SpringCM.folder.upload(folder, fs.createReadStream(logname), logname, null, (err) => {
+			if (err) {
+				return console.log(err);
+			}
+
+			fs.unlinkSync(logname);
+			process.exit(err ? 1 : 0);
+		});
+	});
 });
