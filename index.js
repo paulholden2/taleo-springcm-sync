@@ -170,12 +170,12 @@ async.waterfall([
 	},
 	// Get employee pages
 	(callback) => {
-		const n = 50;
+		const n = 200;
 
 		log('Pulling employee list in pages of ' + n);
 
 		Taleo.employee.pages(n, (err, pages) => {
-			callback(err, pages.slice(-3));
+			callback(err, pages);
 		});
 	},
 	// Combine pages into a single list of employees
@@ -228,8 +228,10 @@ async.waterfall([
 						// Filter out unsigned/incomplete activity forms
 						res.forEach((actv) => {
 							if (actv.href.download) {
-								if (ssnLookup.hasOwnProperty(employee.ssn.replace('-', ''))) {
-									var emp = ssnLookup[employee.ssn.replace('-', '')];
+								var ssn = employee.ssn.replace(/[\-\s]*/g, '');
+
+								if (ssnLookup.hasOwnProperty(ssn)) {
+									var emp = ssnLookup[ssn];
 									var loc = getLocationPath(employee.location);
 									var locName = getLocationName(employee.location);
 
@@ -320,7 +322,7 @@ async.waterfall([
 	},
 	// Assign child processes a portion of the activities to sync to SpringCM
 	(activities, callback) => {
-		if (activities.length === 0) {
+		if (activities.length === 0 || true) {
 			log('No activities to upload');
 			return callback();
 		}
