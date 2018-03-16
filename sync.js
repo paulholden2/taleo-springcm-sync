@@ -10,16 +10,15 @@ const tag = `[${process.pid}] `;
 
 const dest = '/PMH/Alta Hospitals/Human Resources/Foothills/_Admin/Stria Deliveries/';
 
-function plog(msg) {
-	process.send({
-		status: 'log',
-		log: msg
-	});
-}
-
-function iterateActivities(sequelize, employeeLookup, locationLookup, activities, callback) {
+function iterateActivities(sequelize, employeeLookup, locationLookup, activities, plog, callback) {
 	async.eachSeries(activities, (actv, next) => {
 		var emp = employeeLookup[actv.employeeID];
+
+		if (!emp) {
+			plog('Error finding employee ' + actv.employeeID + ' in employee lookup');
+			return next();
+		}
+
 		var loc = emp.location && locationLookup[emp.location];
 		var docname = `${emp.id} ${emp.firstName} ${emp.lastName} - ${actv.id} ${actv.title.replace(/[\\\/:<>"|*]/g, '_')}.pdf`;
 
@@ -90,14 +89,7 @@ function iterateActivities(sequelize, employeeLookup, locationLookup, activities
 	});
 }
 
-process.on('message', (msg) => {
-	msg = JSON.parse(msg);
-
-	var locationLookup = msg.locationLookup;
-	var employeeLookup = msg.employeeLookup;
-	var activities = msg.activities;
-	var allowance = msg.allowance;
-
+module.exports = (locationLookup, employeeLookup, activities, allowance, sequelize, plog, callback) => {
 	plog(tag + `Received ${activities.length} activities, allowance of ${allowance}`);
 
 	async.waterfall([
@@ -113,19 +105,10 @@ process.on('message', (msg) => {
 				callback(err);
 			});
 		},
-		(callback) => {
-			orm.initialize('caas-rds.cw0pqculnfgu.us-east-1.rds.amazonaws.com', 'taleo', 'taleo', 'RA3FrBb29n4PfRTDfW', (err, inst) => {
-				if (err) {
-					return callback(err);
-				}
-
-				callback(null, inst);
-			});
-		},
 		// Split activities to sync into 1 chunk per allowance
 		// Allowance is allocated such that the program never
 		// attempts to allocate more than 20 tokens from Taleo
-		(sequelize, callback) => {
+		(callback) => {
 			var len = Math.ceil(activities.length / allowance) + 1;
 
 			async.times(allowance, (n, next) => {
@@ -134,7 +117,7 @@ process.on('message', (msg) => {
 
 				plog(tag + `Section ${from} - ${to - 1}`);
 
-				iterateActivities(sequelize, employeeLookup, locationLookup, activities.slice(from, to), (err) => {
+				iterateActivities(sequelize, employeeLookup, locationLookup, activities.slice(from, to), plog, (err) => {
 					next(err);
 				});
 			}, (err) => {
@@ -146,11 +129,6 @@ process.on('message', (msg) => {
 			plog(err);
 		}
 
-		process.send({
-			pid: process.pid,
-			status: 'complete'
-		});
-
-		process.exit(err ? 1 : 0);
+		callback(err);
 	});
-});
+};

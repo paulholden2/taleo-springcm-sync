@@ -9,9 +9,8 @@ const async = require('async');
 const Taleo = require('taleo-nodejs-sdk');
 const SpringCM = require('springcm-node-sdk');
 const csvjson = require('csvjson');
+const sync = require('./sync.js');
 
-// Array of child process IDs
-var pids = [];
 var ssnLookup = {};
 var locationLookup = {};
 var employeeLookup = {};
@@ -176,7 +175,7 @@ async.waterfall([
 		log('Pulling employee list in pages of ' + n);
 
 		Taleo.employee.pages(n, (err, pages) => {
-			callback(err, pages.slice(-2));
+			callback(err, pages.slice(-3));
 		});
 	},
 	// Combine pages into a single list of employees
@@ -216,8 +215,6 @@ async.waterfall([
 	// Get a list of activities for all packets for each employee
 	(employees, callback) => {
 		log('Compiling list of employee activities');
-
-		var out = fs.createWriteStream('./out.csv');
 
 		// Map each employee to an array of activities
 		async.mapLimit(employees, 18, (employee, callback) => {
@@ -267,8 +264,6 @@ async.waterfall([
 				});
 			});
 		}, (err, lists) => {
-			out.close();
-
 			callback(err, lists);
 		});
 	},
@@ -330,59 +325,7 @@ async.waterfall([
 			return callback();
 		}
 
-		// CPU count
-		var cpus = os.cpus().length;
-		// Pages per process. Splice at this index
-		var per = Math.ceil(activities.length / cpus);
-
-		log(`${cpus} CPUs`);
-		log(`${activities.length} activities`);
-		log(`${per} activities per process`);
-
-		// Split up activities to upload amongst processes
-		for (var i = 0; i < cpus; ++i) {
-			// If all pages are assigned, stop
-			if (i * per >= activities.length) {
-				break;
-			}
-
-			var c = child.fork('./sync');
-			var cpid = c.pid;
-			// How many asynchronous tracks each process may use
-			// 20 max Taleo tokens, reserve one
-			var allowance = Math.floor(19 / cpus);
-
-			pids.push(cpid);
-
-			var from = i * per;
-			var to = Math.min((i + 1) * per - 1, activities.length - 1);
-
-			log(`Spawned child process ${cpid}, assigning ` + (from === to ? `activity ${from}` : `activities ${from} - ${to} (${to - from + 1} total)`));
-			c.send(JSON.stringify({
-				allowance: allowance,
-				employeeLookup: employeeLookup,
-				locationLookup: locationLookup,
-				activities: activities.slice(from, to + 1)
-			}));
-
-			c.on('message', (msg) => {
-				if (msg.status === 'complete') {
-					log(`Child process ${msg.pid} completed work`);
-					var idx = pids.indexOf(msg.pid);
-
-					if (idx > -1) {
-						pids.splice(idx, 1);
-					}
-				} else if (msg.status === 'log') {
-					log(msg.log);
-				}
-			});
-		}
-
-		callback();
-	},
-	(callback) => {
-		async.until(() => pids.length === 0, callback => setTimeout(callback, 1000), err => callback(err));
+		sync(locationLookup, employeeLookup, activities, 18, seq, log, callback);
 	},
 	(callback) => {
 		Object.keys(lookupFiles).forEach((key) => {
