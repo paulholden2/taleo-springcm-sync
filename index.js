@@ -1,247 +1,146 @@
-const fs = require('fs');
-const os = require('os');
-const child = require('child_process');
+const winston = require('winston');
 const async = require('async');
 // Require local library version, these other libraries aren't stable yet
-const Taleo = require('taleo-nodejs-sdk');
+const Taleo = require('taleo-node-sdk');
 const SpringCM = require('springcm-node-sdk');
-const csvjson = require('csvjson');
+const dotenv = require('dotenv');
 
-var ssnLookup = {};
-var locationLookup = {};
-var employeeLookup = {};
+dotenv.config();
 
-function getLocations(callback) {
-	Taleo.location.all((err, locs) => {
-		if (err) {
-			return callback(err);
-		}
-
-		locs.forEach((loc) => {
-			locationLookup[loc.id] = loc;
-		});
-
-		callback(null);
-	});
-}
-
-const locationInfo = [
-	{
-		name: 'Alta Corp',
-		locationIds: [ 39, 38, 70 ]
-	},
-	{
-		name: 'Bellflower',
-		locationIds: [ 37 ]
-	},
-	{
-		name: 'Culver City',
-		locationIds: [ 43 ]
-	},
-	{
-		name: 'Hollywood',
-		locationIds: [ 41 ]
-	},
-	{
-		name: 'Los Angeles',
-		locationIds: [ 86, 76, 36 ]
-	},
-	{
-		name: 'Norwalk',
-		locationIds: [ 40, 69 ]
-	},
-	{
-		name: 'Van Nuys',
-		locationIds: [ 42 ]
-	}
-];
-
-const validLocations = [].concat.apply([], locationInfo.map(loc => loc.locationIds));
+var springCm, taleo, adpExtract;
 
 async.waterfall([
-	(callback) => {
-		console.log('Logging into SpringCM');
+  // ==================================================================
+  // Log in to SpringCM
+  (callback) => {
+    winston.info('Connecting to SpringCM');
 
-		SpringCM.auth.login('uatna11', process.env.SPRINGCM_CLIENT_ID, process.env.SPRINGCM_CLIENT_SECRET, (err, token) => {
-			callback(err);
-		});
-	},
-	(callback) => {
-		console.log('Locating employee lookup');
+    springCm = new SpringCM({
+      dataCenter: 'uatna11',
+      clientId: process.env.SPRINGCM_CLIENT_ID,
+      clientSecret: process.env.SPRINGCM_CLIENT_SECRET
+    });
 
-		SpringCM.document.path('/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv', (err, doc) => {
-			if (err) {
-				return callback(err);
-			}
+    springCm.connect(callback);
+  },
+  // ==================================================================
+  // Get ADP extract in SpringCM
+  (callback) => {
+    winston.info('Getting ADP extract CSV in SpringCM');
 
-			callback(null, doc);
-		});
-	},
-	(doc, callback) => {
-		console.log('Downloading employee lookup');
+    springCm.getDocument('/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv', (err, doc) => {
+      if (err) {
+        return callback(err);
+      }
 
-		var ws = fs.createWriteStream('./lookup.csv');
+      adpExtract = doc;
+      callback();
+    });
+  },
+  (callback) => {
+    winston.info('Connecting to Taleo');
 
-		SpringCM.document.download(doc, ws, (err, doc) => {
-			callback(err);
-		});
-	},
-	(callback) => {
-		var adp = csvjson.toObject(fs.readFileSync('./lookup.csv').toString(), {
-			delimiter: ',',
-			quote: '"'
-		});
+    taleo = new Taleo({
+      orgCode: process.env.TALEO_COMPANYCODE,
+      username: process.env.TALEO_USERNAME,
+      password: process.env.TALEO_PASSWORD
+    });
 
-		callback(null, adp);
-	},
-	(adp, callback) => {
-		adp.forEach((item) => {
-			ssnLookup[item['Social Security Number']] = item;
-		});
+    taleo.connect(callback);
+  },
+  // ==================================================================
+  // Log in to Taleo
+  (callback) => {
+    winston.info('Compiling list of employees');
 
-		callback();
-	},
-	// Taleo dispatcher service
-	(callback) => {
-		Taleo.dispatcher.serviceURL((err, url) => {
-			callback(err);
-		});
-	},
-	// Get locations (also creates location lookup)
-	(callback) => {
-		getLocations(callback);
-	},
-	// Get employee pages
-	(callback) => {
-		Taleo.employee.pages(200, (err, pages) => {
-			callback(err, pages);
-		});
-	},
-	// Combine pages into a single list of employees
-	(pages, callback) => {
-		var employees = [];
+    taleo.getEmployees((err, employees) => {
+      if (err) {
+        return callback(err);
+      }
 
-		// Compile a list of all employees
-		async.eachSeries(pages, (page, next) => {
-			Taleo.page.read(page, (err, res) => {
-				employees = employees.concat(res);
-				next(err);
-			});
-		}, (err) => {
-			callback(err, employees);
-		});
-	},
-	// Filter out employees not from Foothill (location id: 1)
-	(employees, callback) => {
-		callback(null, employees.filter((emp) => {
-			return validLocations.indexOf(emp.location) > -1;
-		}));
-	},
-	// Create employee lookup
-	(employees, callback) => {
-		employees.forEach((emp) => {
-			employeeLookup[emp.id] = emp;
-		});
+      winston.info(`Found ${employees.length} employees in Taleo`);
 
-		callback(null, employees);
-	},
-	// Get a list of activities for all packets for each employee
-	(employees, callback) => {
-		var out = fs.createWriteStream('./out.csv');
+      callback(null, employees);
+    });
+  },
+  // ==================================================================
+  // Filter out exceptions (lookup to ADP extract in SpringCM fails)
+  (employees, callback) => {
+    async.eachSeries(employees, (employee, callback) => {
+      var employeeSsn = employee.getSsn();
 
-		// Map each employee to an array of activities
-		async.mapLimit(employees, 18, (employee, callback) => {
-			Taleo.employee.packets(employee, (err, packets) => {
-				// List of signed activities for this employee
-				var activities = [];
+      // Skip if no SSN
+      if (!employeeSsn) {
+        winston.error(`Missing SSN for Taleo employee ${employee.getId()}`);
+        return callback();
+      }
 
-				async.eachSeries(packets, (packet, next) => {
-					Taleo.packet.activities(packet, (err, res) => {
-						// Filter out unsigned/incomplete activity forms
-						res.forEach((actv) => {
-							if (Taleo.activity.signed(actv)) {
-								activities.push(actv);
-							}
+      // Filter out non-digits
+      employeeSsn = employeeSsn.replace(/[^\d]*/g, '');
 
-							if (ssnLookup.hasOwnProperty(employee.ssn.replace('-', ''))) {
-								var emp = ssnLookup[employee.ssn.replace('-', '')];
-								out.write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title}.pdf","${emp['Clock Number']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '')}"\r\n`);
-							}
-						});
+      // Skip if not a full-length SSN
+      if (employeeSsn.length !== 9) {
+        winston.error(`Invalid SSN for Taleo employee ${employee.getId()}`);
+        return callback();
+      }
 
-						console.log(`${activities.length} form${activities.length === 1 ? '' : 's'} in ${packets.length} packet${packets.length === 1 ? '' : 's'} found for ${employee.id} - ${employee.firstName} ${employee.lastName}`);
+      // Do a lookup against the ADP extract in SpringCM for this employee
+      // by SSN.
+      springCm.csvLookup(adpExtract, {
+        'Social Security Number': employeeSsn
+      }, (err, rows) => {
+        if (err) {
+          winston.error(err);
+          return callback();
+        }
 
-						next(err);
-					});
-				}, (err) => {
-					callback(err, activities);
-				});
-			});
-		}, (err, lists) => {
-			out.close();
+        // We expect a single row to be returned
+        if (rows.length === 0) {
+          winston.error(`Taleo employee ${employee.getId()} missing from ADP extract`);
+          return callback();
+        } else if (rows.length !== 1) {
+          winston.error(`Multiple rows in ADP extract for Taleo employee ${employee.getId()}`);
+          return callback();
+        }
 
-			callback(err, lists);
-		});
-	},
-	// Flatten the 2D array of activities
-	(lists, callback) => {
-		var activities = [];
-
-		lists.forEach((list) => {
-			// May be undefined if employee had no packets
-			if (list) {
-				list.forEach((item) => {
-					activities = activities.concat(item);
-				});
-			}
-		});
-
-		console.log(`${activities.length} total activities to sync to SpringCM`);
-
-		callback(null, activities);
-	},
-	// Assign child processes a portion of the activities to sync to SpringCM
-	(activities, callback) => {
-		// CPU count
-		var cpus = os.cpus().length;
-		// Pages per process. Splice at this index
-		var per = Math.ceil(activities.length / cpus);
-
-		console.log(`${cpus} CPUs`);
-		console.log(`${activities.length} activities`);
-		console.log(`${per} activities per process`);
-
-		// Split up activities to upload amongst processes
-		for (var i = 0; i < cpus; ++i) {
-			// If all pages are assigned, stop
-			if (i * per >= activities.length) {
-				break;
-			}
-
-			var c = child.fork('./sync');
-			var cpid = c.pid;
-			// How many asynchronous tracks each process may use
-			// 20 max Taleo tokens, reserve one
-			var allowance = Math.floor(19 / cpus);
-
-			var from = i * per;
-			var to = Math.min((i + 1) * per - 1, activities.length - 1);
-
-			console.log(`Spawned child process ${cpid}, assigning ` + (from === to ? `activity ${from}` : `activities ${from} - ${to} (${to - from + 1} total)`));
-			c.send(JSON.stringify({
-				allowance: allowance,
-				employeeLookup: employeeLookup,
-				locationLookup: locationLookup,
-				activities: activities.slice(from, to + 1)
-			}));
-		}
-
-		callback(null);
-	}
+        winston.info(`Lookup match for Taleo employee ${employee.getId()}, ADP Employee ID: ${rows[0]['EMP ID']}`);
+        callback();
+      });
+    });
+  }
+  // Get packets & activities for non-exception employees
+  // Upload files, add data to load list for successful uploads
+  // On upload, pull page count from SpringCM response
+  // Upload load lists
 ], (err) => {
-	// TODO: Upload log file
-	if (err) {
-		console.log(err);
-		process.exit(1);
-	}
+  if (err) {
+    winston.error(err);
+  }
+
+  // Close/log out of Taleo and SpringCM
+  async.waterfall([
+    (callback) => {
+      if (springCm) {
+        winston.info('Disconnecting from SpringCM');
+        springCm.close(callback);
+      } else {
+        callback();
+      }
+    },
+    (callback) => {
+      if (taleo) {
+        winston.info('Disconnecting from Taleo');
+        taleo.close(callback);
+      } else {
+        callback();
+      }
+    }
+  ], (err) => {
+    if (err) {
+      winston.error(err);
+      process.exit(1);
+    }
+
+    process.exit(0);
+  });
 });

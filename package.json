@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "",
+    "lint": "eslint .",
     "start": "node index.js"
   },
   "repository": {
@@ -28,9 +29,19 @@
   "dependencies": {
     "async": "^2.4.1",
     "csvjson": "^5.0.0",
+    "dotenv": "^5.0.1",
     "sequelize": "^4.35.1",
-    "springcm-node-sdk": "^0.1.16",
-    "taleo-nodejs-sdk": "^0.1.5",
-    "tedious": "^2.3.1"
+    "springcm-node-sdk": "^1.2.0",
+    "taleo-node-sdk": "^0.4.1",
+    "tedious": "^2.3.1",
+    "winston": "^2.4.2"
+  },
+  "devDependencies": {
+    "eslint": "^4.19.1",
+    "eslint-config-standard": "^11.0.0",
+    "eslint-plugin-import": "^2.11.0",
+    "eslint-plugin-node": "^6.0.1",
+    "eslint-plugin-promise": "^3.7.0",
+    "eslint-plugin-standard": "^3.0.1"
   }
 }
