@@ -10,9 +10,11 @@ dotenv.config();
 var springCm, taleo, adpExtract;
 
 async.waterfall([
-  // ==================================================================
-  // Log in to SpringCM
   (callback) => {
+    /**
+     * Log in to SpringCM
+     */
+
     winston.info('Connecting to SpringCM');
 
     springCm = new SpringCM({
@@ -23,9 +25,11 @@ async.waterfall([
 
     springCm.connect(callback);
   },
-  // ==================================================================
-  // Get ADP extract in SpringCM
   (callback) => {
+    /**
+     * Get ADP extract in SpringCM
+     */
+
     winston.info('Getting ADP extract CSV in SpringCM');
 
     springCm.getDocument('/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv', (err, doc) => {
@@ -38,6 +42,10 @@ async.waterfall([
     });
   },
   (callback) => {
+    /**
+     * Log in to Taleo
+     */
+
     winston.info('Connecting to Taleo');
 
     taleo = new Taleo({
@@ -48,12 +56,13 @@ async.waterfall([
 
     taleo.connect(callback);
   },
-  // ==================================================================
-  // Log in to Taleo
   (callback) => {
     winston.info('Compiling list of employees');
 
-    taleo.getEmployees((err, employees) => {
+    taleo.getEmployees({
+      start: 1,
+      limit: 50
+    }, (err, employees) => {
       if (err) {
         return callback(err);
       }
@@ -63,51 +72,80 @@ async.waterfall([
       callback(null, employees);
     });
   },
-  // ==================================================================
-  // Filter out exceptions (lookup to ADP extract in SpringCM fails)
   (employees, callback) => {
-    async.eachSeries(employees, (employee, callback) => {
-      var employeeSsn = employee.getSsn();
+    var queue = async.queue((employee, callback) => {
+      async.waterfall([
+        (callback) => {
+          var employeeSsn = employee.getSsn();
 
-      // Skip if no SSN
-      if (!employeeSsn) {
-        winston.error(`Missing SSN for Taleo employee ${employee.getId()}`);
-        return callback();
-      }
+          // Skip if no SSN
+          if (!employeeSsn) {
+            return callback(`Missing SSN for Taleo employee ${employee.getId()}`);
+          }
 
-      // Filter out non-digits
-      employeeSsn = employeeSsn.replace(/[^\d]*/g, '');
+          // Filter out non-digits
+          employeeSsn = employeeSsn.replace(/[^\d]*/g, '');
 
-      // Skip if not a full-length SSN
-      if (employeeSsn.length !== 9) {
-        winston.error(`Invalid SSN for Taleo employee ${employee.getId()}`);
-        return callback();
-      }
+          // Skip if not a full-length SSN
+          if (employeeSsn.length !== 9) {
+            return callback(`Invalid SSN for Taleo employee ${employee.getId()}`);
+          }
 
-      // Do a lookup against the ADP extract in SpringCM for this employee
-      // by SSN.
-      springCm.csvLookup(adpExtract, {
-        'Social Security Number': employeeSsn
-      }, (err, rows) => {
+          // Do a lookup against the ADP extract in SpringCM for this employee
+          // by SSN.
+          springCm.csvLookup(adpExtract, {
+            'Social Security Number': employeeSsn
+          }, (err, rows) => {
+            if (err) {
+              return callback(err);
+            }
+
+            // We expect a single row to be returned
+            if (rows.length === 0) {
+              return callback(`Taleo employee ${employee.getId()} missing from ADP extract`);
+            } else if (rows.length !== 1) {
+              return callback(`Multiple rows in ADP extract for Taleo employee ${employee.getId()}`);
+            }
+
+            callback();
+          });
+        },
+        (callback) => {
+          // Get all packets for the employee
+          taleo.getPackets(employee, (err, packets) => {
+            if (err) {
+              winston.error(err);
+              return callback();
+            }
+
+            winston.info('Found', packets.length, 'packets for employee', employee.getId());
+
+            // Get all activities for the packet
+            async.eachSeries(packets, (packet, callback) => {
+              taleo.getActivities(packet, (err, activities) => {
+                winston.info('Found', activities.length, 'activities for packet', packet.getId());
+              });
+            }, (err) => {
+              if (err) {
+                return callback(err);
+              }
+
+              callback();
+            });
+          });
+        }
+      ], (err) => {
         if (err) {
           winston.error(err);
-          return callback();
         }
 
-        // We expect a single row to be returned
-        if (rows.length === 0) {
-          winston.error(`Taleo employee ${employee.getId()} missing from ADP extract`);
-          return callback();
-        } else if (rows.length !== 1) {
-          winston.error(`Multiple rows in ADP extract for Taleo employee ${employee.getId()}`);
-          return callback();
-        }
-
-        winston.info(`Lookup match for Taleo employee ${employee.getId()}, ADP Employee ID: ${rows[0]['EMP ID']}`);
         callback();
       });
     });
-  }
+
+    queue.push(employees);
+    queue.drain = callback;
+  },
   // Get packets & activities for non-exception employees
   // Upload files, add data to load list for successful uploads
   // On upload, pull page count from SpringCM response

@@ -28,10 +28,10 @@
   "homepage": "https://bitbucket.org/paulholden/taleo-springcm-sync#readme",
   "dependencies": {
     "async": "^2.4.1",
-    "csvjson": "^5.0.0",
     "dotenv": "^5.0.1",
+    "lodash": "^4.17.10",
     "sequelize": "^4.35.1",
-    "springcm-node-sdk": "^1.2.0",
+    "springcm-node-sdk": "^1.4.1",
     "taleo-node-sdk": "^0.4.1",
     "tedious": "^2.3.1",
     "winston": "^2.4.2"

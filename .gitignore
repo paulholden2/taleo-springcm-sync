@@ -1,3 +1,4 @@
+*.caasrc
 node_modules/*
 .env
 *.pdf
