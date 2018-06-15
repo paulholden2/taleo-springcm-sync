@@ -30,8 +30,9 @@
     "async": "^2.4.1",
     "dotenv": "^5.0.1",
     "lodash": "^4.17.10",
+    "rc": "^1.2.8",
     "sequelize": "^4.35.1",
-    "springcm-node-sdk": "^1.4.1",
+    "springcm-node-sdk": "^1.5.0",
     "taleo-node-sdk": "^0.4.1",
     "tedious": "^2.3.1",
     "winston": "^2.4.2"
