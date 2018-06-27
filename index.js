@@ -587,7 +587,7 @@ async.waterfall([
 
     var start = 1;
     var length = 0;
-    const _max = 5; // For testing; 0 = no max
+    const _max = 0; // For testing; 0 = no max
     const limit = 50;
 
     async.doUntil((callback) => {
