@@ -1,7 +1,9 @@
+const fs = require('fs');
 const rc = require('rc');
 const commander = require('commander');
 const _ = require('lodash');
 const path = require('path');
+const tmp = require('tmp');
 const Sequelize = require('sequelize');
 const winston = require('winston');
 const async = require('async');
@@ -86,7 +88,6 @@ async.waterfall([
         page_count: Sequelize.INTEGER,
         activity_title: Sequelize.STRING(400),
         employee_id: Sequelize.INTEGER,
-        activity_id: Sequelize.INTEGER,
         employee_name: Sequelize.STRING(400),
         exception_upload: Sequelize.INTEGER
       });
@@ -253,7 +254,10 @@ async.waterfall([
                    * file to the to-file folder and index it so it routes.
                    */
 
+                  // Pulled from config by lookup against PSID in Taleo
                   var locationName;
+                  // SpringCM delivery folder
+                  var uploadFolder;
 
                   // So we can exit the waterfall early if we have to
                   var nextActivity = callback;
@@ -301,19 +305,48 @@ async.waterfall([
 
                       var folderPath = `/PMH/Alta Hospitals/Human Resources/${locationName}/_Documents_To_File`;
 
-                      springCm.getFolder(folderPath, callback);
+                      springCm.getFolder(folderPath, (err, folder) => {
+                        if (err) {
+                          return callback(err);
+                        }
+
+                        uploadFolder = folder;
+
+                        callback();
+                      });
                     },
-                    (folder, callback) => {
+                    (callback) => {
                       /**
-                       * Pipe the downloaded file to the SpringCM upload
+                       * Download the activity to a temp file
                        */
+                      tmp.file((err, path, fd, cleanup) => {
+                        if (err) {
+                          return callback(err);
+                        }
 
-                      taleo.downloadActivity(activity, (readStream) => {
-                        springCm.uploadDocument(folder, readStream, callback);
-                      }, () => {
-                        winston.info('Downloaded activity ' + activity.getId());
+                        callback(null, path);
+                      });
+                    },
+                    (tmpPath, callback) => {
+                      taleo.downloadActivity(activity, fs.createWriteStream(tmpPath), (err) => {
+                        if (err) {
+                          return callback(err);
+                        }
 
-                        // Don't need to call callback, the SpringCM upload does that
+                        winston.info(`Downloaded activity ${activity.getId()} to ${tmpPath}`);
+
+                        callback(null, tmpPath);
+                      });
+                    },
+                    (tmpPath, callback) => {
+                      springCm.uploadDocument(uploadFolder, fs.createReadStream(tmpPath), (err, doc) => {
+                        if (err) {
+                          return callback(err);
+                        }
+
+                        winston.info(`Uploaded activity ${activity.getId()} to SpringCM`);
+
+                        callback(null, doc);
                       });
                     },
                     (doc, callback) => {
@@ -418,6 +451,9 @@ async.waterfall([
            * Get all attachments for the employee, then upload to SpringCM.
            */
 
+          // Not doing attachments quite yet
+          return callback();
+
           taleo.getAttachments(employee, (err, attachments) => {
             if (err) {
               return callback(err);
@@ -448,14 +484,15 @@ async.waterfall([
      * employee at a valid location as we receive them.
      */
 
-    var start = 100;
+    var start = 1;
     var length = 0;
-    var max = 5;
+    const _max = 0; // For testing; 0 = no max
+    const limit = 50;
 
     async.doUntil((callback) => {
       taleo.getEmployees({
         start: start,
-        limit: 5
+        limit: limit
       }, (err, employees) => {
         if (err) {
           return callback(err);
@@ -480,7 +517,7 @@ async.waterfall([
         callback();
       });
     }, () => {
-      return length === 0 || start > max;
+      return length === 0 || (_max > 0 && start > _max);
     }, (err) => {
       if (err) {
         return callback(err);
