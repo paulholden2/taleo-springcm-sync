@@ -9,6 +9,7 @@ const winston = require('winston');
 const async = require('async');
 const Taleo = require('taleo-node-sdk');
 const SpringCM = require('springcm-node-sdk');
+const WinstonCloudWatch = require('winston-cloudwatch');
 
 require('winston-daily-rotate-file');
 
@@ -26,7 +27,7 @@ var conf = rc('caas');
  */
 var springCm, taleo, adpExtract, sequelize;
 // Winston transports
-var fileTransport, consoleTransport;
+var fileTransport, consoleTransport, cwlTransport;
 // Which location IDs to sync Taleo employees for
 var validLocations;
 // ORM models
@@ -35,22 +36,41 @@ var models = {};
 async.waterfall([
   (callback) => {
     fileTransport = new (winston.transports.DailyRotateFile)({
+      level: 'info',
+      format: winston.format.simple(),
       filename: path.join(__dirname, 'logs', 'log-%DATE%.log'),
       datePattern: 'YYYY-MM-DD',
       maxFiles: '14d'
     });
 
-    consoleTransport = new (winston.transports.Console)();
-
-    winston.configure({
+    consoleTransport = new (winston.transports.Console)({
       level: 'info',
-      transports: [
-        consoleTransport,
-        fileTransport
-      ]
+      format: winston.format.simple()
     });
 
-    winston.handleExceptions([ consoleTransport, fileTransport ]);
+    var transports = [
+      consoleTransport,
+      fileTransport
+    ];
+
+    var cw = _.get(conf, 'taleo-springcm-sync.logs.cloudwatch');
+
+    if (cw) {
+      // Set up logging to AWS CloudWatch Logs
+      cwlTransport = new WinstonCloudWatch(_.merge(cw, {
+        messageFormatter: (entry) => {
+          return JSON.stringify(_.get(entry, 'meta'));
+        }
+      }));
+
+      transports.push(cwlTransport);
+    }
+
+    winston.configure({
+      transports: transports
+    });
+
+    winston.handleExceptions(transports);
 
     winston.info('========================================');
     winston.info('taleo-springcm-sync');
@@ -64,7 +84,11 @@ async.waterfall([
     var username = _.get(conf, [ 'taleo-springcm-sync', 'database', 'username' ]);
     var password = _.get(conf, [ 'taleo-springcm-sync', 'database', 'password' ]);
 
-    winston.info('Connecting to', database, 'with username', username);
+    winston.info(`Connecting to ${hostname} with username ${username}`, {
+      database: database,
+      username: username,
+      hostname: hostname
+    });
 
     seq = new Sequelize(database, username, password, {
       host: hostname,
@@ -106,7 +130,9 @@ async.waterfall([
         exception_upload: Sequelize.INTEGER
       });
     }).then(() => {
-      winston.info('Syncing with database');
+      winston.info('Syncing with database', {
+        database: database
+      });
 
       seq.sync().then(() => {
         sequelize = seq;
@@ -119,9 +145,14 @@ async.waterfall([
      * Log in to SpringCM
      */
 
-    winston.info('Connecting to SpringCM');
+    var auth = _.get(conf, 'taleo-springcm-sync.springCm.auth');
 
-    client = new SpringCM(_.get(conf, 'taleo-springcm-sync.springCm.auth'));
+    winston.info('Connecting to SpringCM', {
+      clientId: auth.clientId,
+      dataCenter: auth.dataCenter
+    });
+
+    client = new SpringCM(auth);
 
     client.connect((err) => {
       if (err) {
@@ -138,9 +169,13 @@ async.waterfall([
      * Get ADP extract in SpringCM
      */
 
-    winston.info('Getting ADP extract CSV in SpringCM');
+    var adpExtractPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv';
 
-    springCm.getDocument('/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv', (err, doc) => {
+    winston.info('Getting ADP extract CSV in SpringCM', {
+      path: adpExtractPath
+    });
+
+    springCm.getDocument(adpExtractPath, (err, doc) => {
       if (err) {
         return callback(err);
       }
@@ -154,9 +189,14 @@ async.waterfall([
      * Log in to Taleo
      */
 
-    winston.info('Connecting to Taleo');
+    var auth = _.get(conf, 'taleo-springcm-sync.taleo.auth');
 
-    client = new Taleo(_.get(conf, 'taleo-springcm-sync.taleo.auth'));
+    winston.info('Connecting to Taleo', {
+      orgCode: auth.orgCode,
+      username: auth.username
+    });
+
+    client = new Taleo(auth);
 
     client.connect((err) => {
       if (err) {
@@ -164,6 +204,8 @@ async.waterfall([
       }
 
       taleo = client;
+
+      console.log('Auth token: ' + taleo.authToken);
 
       callback();
     });
@@ -185,6 +227,8 @@ async.waterfall([
      */
 
     var queue = async.queue((employee, callback) => {
+      const employeeName = `${employee.getFirstName()} ${employee.getLastName()}`;
+
       async.waterfall([
         (callback) => {
           /**
@@ -197,7 +241,7 @@ async.waterfall([
 
           // Skip if no SSN
           if (!employeeSsn) {
-            return callback(`Missing SSN for Taleo employee ${employee.getId()}`);
+            return callback(new Error(`Missing SSN for Taleo employee ${employee.getId()}`));
           }
 
           // Filter out non-digits
@@ -219,9 +263,9 @@ async.waterfall([
 
             // We expect a single row to be returned
             if (rows.length === 0) {
-              return callback(`Taleo employee ${employee.getId()} missing from ADP extract`);
+              return callback(new Error(`Taleo employee ${employee.getId()} missing from ADP extract`));
             } else if (rows.length !== 1) {
-              return callback(`Multiple rows in ADP extract for Taleo employee ${employee.getId()}`);
+              return callback(new Error(`Multiple rows in ADP extract for Taleo employee ${employee.getId()}`));
             }
 
             callback(null, rows[0]);
@@ -235,16 +279,24 @@ async.waterfall([
 
           taleo.getPackets(employee, (err, packets) => {
             if (err) {
-              winston.error(err);
-              return callback();
+              return callback(err);
             }
 
-            winston.info('Found', packets.length, 'packets for employee', employee.getId());
+            winston.info(`Found ${packets.length} packets for employee ${employee.getId()}`, {
+              packets: packets.map(p => p.getId()),
+              employeeId: employee.getId(),
+              employeeName: employeeName
+            });
 
             // Get all activities for the packet
             async.eachSeries(packets, (packet, callback) => {
               taleo.getActivities(packet, (err, activities) => {
-                winston.info('Found', activities.length, 'activities for packet', packet.getId());
+                winston.info(`Found ${activities.length} activities for packet ${packet.getId()}`, {
+                  activities: activities.map(a => a.getId()),
+                  packet: packet.getId(),
+                  employeeId: employee.getId(),
+                  employeeName: employeeName
+                });
 
                 async.eachSeries(activities, (activity, callback) => {
                   /**
@@ -270,7 +322,12 @@ async.waterfall([
                         }
                       }).then(actv => {
                         if (actv) {
-                          winston.info('Activity already delivered: ' + activity.getId());
+                          winston.info(`Activity already delivered: ${activity.getId()}`, {
+                            activity: activity.getId(),
+                            packet: packet.getId(),
+                            employeeId: employee.getId(),
+                            employeeName: employeeName
+                          });
 
                           return nextActivity();
                         }
@@ -333,7 +390,13 @@ async.waterfall([
                           return callback(err);
                         }
 
-                        winston.info(`Downloaded activity ${activity.getId()} to ${tmpPath}`);
+                        winston.info(`Downloaded activity ${activity.getId()} to ${tmpPath}`, {
+                          activity: activity.getId(),
+                          packet: packet.getId(),
+                          employeeId: employee.getId(),
+                          employeeName: employeeName,
+                          tmpPath: tmpPath
+                        });
 
                         callback(null, tmpPath);
                       });
@@ -344,7 +407,13 @@ async.waterfall([
                           return callback(err);
                         }
 
-                        winston.info(`Uploaded activity ${activity.getId()} to SpringCM`);
+                        winston.info(`Uploaded activity ${activity.getId()} to SpringCM`, {
+                          activity: activity.getId(),
+                          packet: packet.getId(),
+                          employeeId: employee.getId(),
+                          employeeName: employeeName,
+                          remotePath: uploadFolder.getPath()
+                        });
 
                         callback(null, doc);
                       });
@@ -354,7 +423,12 @@ async.waterfall([
                        * Index the uploaded document
                        */
 
-                      winston.info('Uploaded activity ' + activity.getId());
+                      winston.info(`Uploaded activity ${activity.getId()}`, {
+                        activity: activity.getId(),
+                        packet: packet.getId(),
+                        employeeId: employee.getId(),
+                        employeeName: employeeName
+                      });
 
                       if (locationName === 'Culver City') {
                         springCm.setDocumentAttributes(doc, {
@@ -380,6 +454,16 @@ async.waterfall([
                           if (err) {
                             return callback(err);
                           }
+
+                          winston.info(`Tagged activity ${activity.getId()}`, {
+                            activity: activity.getId(),
+                            packet: packet.getId(),
+                            employeeId: employee.getId(),
+                            employeeName: employeeName,
+                            attributeGroup: 'PMH Employee File - Culver City',
+                            adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                            documentName: activity.getTitle()
+                          });
 
                           callback(null, doc);
                         });
@@ -408,29 +492,42 @@ async.waterfall([
                             return callback(err);
                           }
 
+                          winston.info(`Tagged activity ${activity.getId()}`, {
+                            activity: activity.getId(),
+                            packet: packet.getId(),
+                            employeeId: employee.getId(),
+                            employeeName: employeeName,
+                            attributeGroup: 'PMH Employee File - Alta HR',
+                            adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                            documentName: activity.getTitle()
+                          });
+
                           callback(null, doc);
                         });
                       }
                     },
                     (doc, callback) => {
-                      winston.info('Tagged activity ' + activity.getId());
-
                       models.ActivityExport.create({
                         'activity': activity.getId(),
                         'page_count': doc.getPageCount(),
                         'activity_title': activity.getTitle(),
                         'employee_id': activity.getEmployeeId(),
-                        'employee_name': `${employee.getFirstName()} ${employee.getLastName()}`,
+                        'employee_name': employeeName,
                         'exception_upload': 0
                       }).then((row) => {
-                        winston.info('Logged into database: activity ' + activity.getId());
+                        winston.info(`Logged into database: activity ${activity.getId()}`, {
+                          activity: activity.getId(),
+                          packet: packet.getId(),
+                          employeeId: employee.getId(),
+                          employeeName: employeeName
+                        });
 
                         callback();
                       }).catch(callback);
                     }
                   ], (err) => {
                     if (err) {
-                      winston.error(err);
+                      winston.error(err.message, err);
                     }
 
                     callback();
@@ -459,7 +556,11 @@ async.waterfall([
               return callback(err);
             }
 
-            winston.info('Found', attachments.length, 'attachments for employee', employee.getId());
+            winston.info(`Found ${attachments.length} attachments for employee ${employee.getId()}`, {
+              attachments: attachments.map(a => a.getId()),
+              employeeId: employee.getId(),
+              employeeName: employeeName
+            });
 
             async.eachSeries(attachments, (attachment, callback) => {
               callback();
@@ -468,7 +569,7 @@ async.waterfall([
         }
       ], (err) => {
         if (err) {
-          winston.error(err);
+          winston.error(err.message, err);
         }
 
         callback();
@@ -486,7 +587,7 @@ async.waterfall([
 
     var start = 1;
     var length = 0;
-    const _max = 0; // For testing; 0 = no max
+    const _max = 5; // For testing; 0 = no max
     const limit = 50;
 
     async.doUntil((callback) => {
@@ -505,9 +606,16 @@ async.waterfall([
         }
 
         if (length > 1) {
-          winston.info('Queueing employees', start, 'through', start + length);
+          winston.info(`Queueing employees ${start} through ${start + length}`, {
+            start: start,
+            end: start + length,
+            count: length
+          });
         } else if (length === 1) {
-          winston.info('Queueing employee', start);
+          winston.info(`Queueing employee ${start}`, {
+            start: start,
+            count: 1
+          });
         }
 
         _.each(_.filter(employees, e => validLocations.indexOf(e.getLocation()) > -1), e => queue.push(e));
@@ -532,7 +640,7 @@ async.waterfall([
   }
 ], (err) => {
   if (err) {
-    winston.error(err);
+    winston.error(err.message, err);
   }
 
   // Close/log out of Taleo and SpringCM and disconnect from database
@@ -566,14 +674,21 @@ async.waterfall([
     var code = 0;
 
     if (err) {
-      winston.error(err);
+      winston.error(err.message, err);
       code = 1;
     }
 
     // Wait for our winston transports to finish streaming data, then exit
     async.parallel([
-      callback => fileTransport.on('finished', callback),
-      callback => consoleTransport.on('finished', callback)
+      (callback) => fileTransport.on('finished', callback),
+      (callback) => consoleTransport.on('finished', callback),
+      (callback) => {
+        if (cwlTransport) {
+          cwlTransport.kthxbye(callback)
+        } else {
+          callback();
+        }
+      }
     ], () => {
       process.exit(code);
     });
