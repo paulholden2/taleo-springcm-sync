@@ -249,7 +249,7 @@ async.waterfall([
 
           // Skip if not a full-length SSN
           if (employeeSsn.length !== 9) {
-            return callback(`Invalid SSN for Taleo employee ${employee.getId()}`);
+            return callback(new Error(`Invalid SSN for Taleo employee ${employee.getId()}`));
           }
 
           // Do a lookup against the ADP extract in SpringCM for this employee
