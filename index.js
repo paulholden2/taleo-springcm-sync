@@ -641,7 +641,9 @@ async.waterfall([
                   });
                 },
                 (tmpPath, callback) => {
-                  springCm.uploadDocument(uploadFolder, fs.createReadStream(tmpPath), (err, doc) => {
+                  springCm.uploadDocument(uploadFolder, fs.createReadStream(tmpPath), {
+                    name: attachment.getFileName(),
+                  }, (err, doc) => {
                     if (err) {
                       return callback(err);
                     }
