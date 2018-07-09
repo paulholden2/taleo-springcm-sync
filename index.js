@@ -823,7 +823,7 @@ async.waterfall([
      * employee at a valid location as we receive them.
      */
 
-    var start = 200;
+    var start = 1;
     var length = 0;
     const _max = 0; // For testing; 0 = no max
     const limit = 25;
