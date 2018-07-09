@@ -343,7 +343,7 @@ async.waterfall([
 
                       var psid = _.get(adpEmployee, 'PSID');
                       var locations = _.get(conf, 'taleo-springcm-sync.taleo.locations');
-                      var matches = _.filter(locations, loc => _.get(loc, 'psid') === psid);
+                      var matches = _.filter(locations, loc => _.get(loc, 'psid').toLowerCase() === psid.toLowerCase());
 
                       if (matches.length === 0) {
                         return callback(new Error('No locations found for ADP PSID ' + psid));
@@ -825,7 +825,7 @@ async.waterfall([
 
     var start = 200;
     var length = 0;
-    const _max = 25; // For testing; 0 = no max
+    const _max = 0; // For testing; 0 = no max
     const limit = 25;
 
     async.doUntil((callback) => {
