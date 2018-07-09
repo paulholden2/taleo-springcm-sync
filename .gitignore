@@ -1,4 +1,6 @@
+*.caasrc
 node_modules/*
+logs/*
 .env
 *.pdf
 *.csv

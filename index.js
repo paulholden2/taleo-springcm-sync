@@ -1,392 +1,934 @@
 const fs = require('fs');
+const rc = require('rc');
+const commander = require('commander');
+const _ = require('lodash');
 const path = require('path');
-const os = require('os');
-const orm = require('./orm.js');
-const child = require('child_process');
-const moment = require('moment');
+const tmp = require('tmp');
+const Sequelize = require('sequelize');
+const winston = require('winston');
 const async = require('async');
-// Require local library version, these other libraries aren't stable yet
-const Taleo = require('taleo-nodejs-sdk');
+const Taleo = require('taleo-node-sdk');
 const SpringCM = require('springcm-node-sdk');
-const csvjson = require('csvjson');
-const sync = require('./sync.js');
+const WinstonCloudWatch = require('winston-cloudwatch');
 
-var ssnLookup = {};
-var locationLookup = {};
-var employeeLookup = {};
-var logname = moment().format('YYYY-MM-DD HH.mm.ss') + '.log';
-var logfile = fs.createWriteStream(logname);
-var validCounts = {};
+require('winston-daily-rotate-file');
 
-function log(msg) {
-	console.log(msg);
-	logfile.write(msg + '\n');
-}
+commander.version('0.1.0', '-v, --version');
 
-function getLocationPath(id) {
-	for (var i = 0; i < locationInfo.length; ++i) {
-		if (locationInfo[i].locationIds.indexOf(id) > -1) {
-			return `/PMH/Alta Hospitals/Human Resources/${locationInfo[i].name}/_Admin/Stria Deliveries`;
-		}
-	}
+// TODO: When/if args  for database, taleo remote, etc. are added, use those as rc defaults
+var conf = rc('caas');
 
-	return null;
-}
-
-function getLocationName(id) {
-	for (var i = 0; i < locationInfo.length; ++i) {
-		if (locationInfo[i].locationIds.indexOf(id) > -1) {
-			return locationInfo[i].name;
-		}
-	}
-
-	return null;
-}
-
-function getLocations(callback) {
-	Taleo.location.all((err, locs) => {
-		if (err) {
-			return callback(err);
-		}
-
-		locs.forEach((loc) => {
-			locationLookup[loc.id] = loc;
-		});
-
-		callback(null);
-	});
-}
-
-const locationInfo = [
-	{
-		name: 'Alta Corp',
-		locationIds: [ 39, 38, 70 ]
-	},
-	{
-		name: 'Bellflower',
-		locationIds: [ 37 ]
-	},
-	{
-		name: 'Culver City',
-		locationIds: [ 43 ]
-	},
-	{
-		name: 'Foothills',
-		locationIds: [ 1 ]
-	},
-	{
-		name: 'Hollywood',
-		locationIds: [ 41 ]
-	},
-	{
-		name: 'Los Angeles',
-		locationIds: [ 86, 76, 36 ]
-	},
-	{
-		name: 'Norwalk',
-		locationIds: [ 40, 69 ]
-	},
-	{
-		name: 'Van Nuys',
-		locationIds: [ 42 ]
-	}
-];
-
-var lookupFiles = {};
-
-const validLocations = [].concat.apply([], locationInfo.map(loc => loc.locationIds));
-var seq;
-
-locationInfo.forEach(function (info) {
-	var loc = info.name;
-	lookupFiles[loc] = fs.createWriteStream(path.join(__dirname, loc + '.csv'));
-	validCounts[loc] = 0;
-});
+/**
+ * Some objects we'll want easy access to:
+ * - SpringCM SDK client
+ * - Taleo SDK client
+ * - SpringCM ADP lookup ref
+ * - ORM
+ */
+var springCm, taleo, adpExtract, sequelize;
+// Winston transports
+var fileTransport, consoleTransport, cwlTransport;
+// Which location IDs to sync Taleo employees for
+var validLocations;
+// ORM models
+var models = {};
 
 async.waterfall([
-	(callback) => {
-		orm.initialize('caas-rds.cw0pqculnfgu.us-east-1.rds.amazonaws.com', 'taleo', 'taleo', 'RA3FrBb29n4PfRTDfW', (err, inst) => {
-			if (err) {
-				return callback(err);
-			}
+  (callback) => {
+    fileTransport = new (winston.transports.DailyRotateFile)({
+      level: 'info',
+      format: winston.format.simple(),
+      filename: path.join(__dirname, 'logs', 'log-%DATE%.log'),
+      datePattern: 'YYYY-MM-DD',
+      maxFiles: '14d'
+    });
 
-			seq = inst;
-			callback();
-		});
-	},
-	(callback) => {
-		log('Logging into SpringCM');
+    consoleTransport = new (winston.transports.Console)({
+      level: 'info',
+      format: winston.format.simple()
+    });
 
-		SpringCM.auth.login('uatna11', process.env.SPRINGCM_CLIENT_ID, process.env.SPRINGCM_CLIENT_SECRET, (err, token) => {
-			callback(err);
-		});
-	},
-	(callback) => {
-		log('Locating employee lookup');
+    var transports = [
+      consoleTransport,
+      fileTransport
+    ];
 
-		SpringCM.document.path('/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv', (err, doc) => {
-			if (err) {
-				return callback(err);
-			}
+    var cw = _.get(conf, 'taleo-springcm-sync.logs.cloudwatch');
 
-			callback(null, doc);
-		});
-	},
-	(doc, callback) => {
-		log('Downloading employee lookup');
+    if (cw) {
+      // Set up logging to AWS CloudWatch Logs
+      cwlTransport = new WinstonCloudWatch(_.merge(cw, {
+        messageFormatter: (entry) => {
+          return JSON.stringify(_.get(entry, 'meta'));
+        }
+      }));
 
-		var ws = fs.createWriteStream('./lookup.csv');
+      transports.push(cwlTransport);
+    }
 
-		SpringCM.document.download(doc, ws, (err, doc) => {
-			callback(err);
-		});
-	},
-	(callback) => {
-		var adp = csvjson.toObject(fs.readFileSync('./lookup.csv').toString(), {
-			delimiter: ',',
-			quote: '"'
-		});
+    winston.configure({
+      transports: transports
+    });
 
-		callback(null, adp);
-	},
-	(adp, callback) => {
-		adp.forEach((item) => {
-			ssnLookup[item['Social Security Number']] = item;
-		});
+    winston.handleExceptions(transports);
 
-		callback();
-	},
-	// Taleo dispatcher service
-	(callback) => {
-		Taleo.dispatcher.serviceURL((err, url) => {
-			callback(err);
-		});
-	},
-	// Get locations (also creates location lookup)
-	(callback) => {
-		log('Getting locations in Taleo to build lookup');
+    winston.info('========================================');
+    winston.info('taleo-springcm-sync');
+    winston.info('========================================');
 
-		getLocations(callback);
-	},
-	// Get employee pages
-	(callback) => {
-		const n = 200;
+    callback();
+  },
+  (callback) => {
+    var database = _.get(conf, [ 'taleo-springcm-sync', 'database', 'database' ]);
+    var hostname = _.get(conf, [ 'taleo-springcm-sync', 'database', 'hostname' ]);
+    var username = _.get(conf, [ 'taleo-springcm-sync', 'database', 'username' ]);
+    var password = _.get(conf, [ 'taleo-springcm-sync', 'database', 'password' ]);
 
-		log('Pulling employee list in pages of ' + n);
+    winston.info(`Connecting to ${hostname} with username ${username}`, {
+      database: database,
+      username: username,
+      hostname: hostname
+    });
 
-		Taleo.employee.pages(n, (err, pages) => {
-			callback(err, pages);
-		});
-	},
-	// Combine pages into a single list of employees
-	(pages, callback) => {
-		var employees = [];
+    seq = new Sequelize(database, username, password, {
+      host: hostname,
+      dialect: 'mssql',
+      timezone: 'America/Los_Angeles',
+      dialectOptions: {
+        connectTimeout: 15000
+      },
+      retry: {
+        max: 5
+      },
+      logging: false
+    });
 
-		log(`Compiling list of employees from ${pages.length} pages`);
+    seq.authenticate().then(() => {
+      models.ActivityExport = seq.define('activity_export', {
+        activity: {
+          type: Sequelize.INTEGER,
+          primaryKey: true
+        },
+        page_count: Sequelize.INTEGER,
+        activity_title: Sequelize.STRING(400),
+        employee_id: Sequelize.INTEGER,
+        employee_name: Sequelize.STRING(400),
+        exception_upload: Sequelize.INTEGER
+      });
 
-		// Compile a list of all employees
-		async.eachSeries(pages, (page, next) => {
-			Taleo.page.read(page, (err, res) => {
-				employees = employees.concat(res);
-				next(err);
-			});
-		}, (err) => {
-			callback(err, employees);
-		});
-	},
-	// Filter out unwanted (not in that way) employees
-	(employees, callback) => {
-		log(`Filtering in employees at designated locations from a total of ${employees.length}`);
+      models.AttachmentExport = seq.define('attachment_export', {
+        attachment: {
+          type: Sequelize.INTEGER,
+          primaryKey: true
+        },
+        page_count: Sequelize.INTEGER,
+        attachment_description: Sequelize.STRING(400),
+        attachment_type: Sequelize.STRING(40),
+        employee_id: Sequelize.INTEGER,
+        attachment_id: Sequelize.INTEGER,
+        employee_name: Sequelize.STRING(400),
+        exception_upload: Sequelize.INTEGER
+      });
+    }).then(() => {
+      winston.info('Syncing with database', {
+        database: database
+      });
 
-		callback(null, employees.filter((emp) => {
-			return validLocations.indexOf(emp.location) > -1;
-		}));
-	},
-	// Create employee lookup
-	(employees, callback) => {
-		log(`Generating employee ID -> employee lookup for ${employees.length} employees`);
+      seq.sync().then(() => {
+        sequelize = seq;
+        callback();
+      });
+    }).catch(callback);
+  },
+  (callback) => {
+    /**
+     * Log in to SpringCM
+     */
 
-		employees.forEach((emp) => {
-			employeeLookup[emp.id] = emp;
-		});
+    var auth = _.get(conf, 'taleo-springcm-sync.springCm.auth');
 
-		callback(null, employees);
-	},
-	// Get a list of activities for all packets for each employee
-	(employees, callback) => {
-		log('Compiling list of employee activities');
+    winston.info('Connecting to SpringCM', {
+      clientId: auth.clientId,
+      dataCenter: auth.dataCenter
+    });
 
-		// Map each employee to an array of activities
-		async.mapLimit(employees, 18, (employee, callback) => {
-			Taleo.employee.packets(employee, (err, packets) => {
-				// List of signed activities for this employee
-				var activities = [];
-				var exceptions = [];
+    client = new SpringCM(auth);
 
-				async.eachSeries(packets, (packet, next) => {
-					Taleo.packet.activities(packet, (err, res) => {
-						// Filter out unsigned/incomplete activity forms
-						res.forEach((actv) => {
-							if (actv.href.download) {
-								var ssn = employee.ssn.replace(/[\-\s]*/g, '');
+    client.connect((err) => {
+      if (err) {
+        return callback(err);
+      }
 
-								if (ssnLookup.hasOwnProperty(ssn)) {
-									var emp = ssnLookup[ssn];
-									var loc = getLocationPath(employee.location);
-									var locName = getLocationName(employee.location);
+      springCm = client;
 
-									actv.destinationPath = loc;
-									actv.isException = 0;
-									activities.push(actv);
+      callback();
+    });
+  },
+  (callback) => {
+    /**
+     * Get ADP extract in SpringCM
+     */
 
-									validCounts[locName] += 1;
+    var adpExtractPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv';
 
-									if (locName === 'Culver City') {
-										lookupFiles[locName].write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title.replace(/[\\\/]/g, '_')}.pdf","${emp['EMP ID']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '').replace(/[\\\/]/g, '_')}",""\r\n`);
-									} else {
-										lookupFiles[locName].write(`"${employee.id} ${employee.firstName} ${employee.lastName} - ${actv.id} ${actv.title.replace(/[\\\/]/g, '_')}.pdf","${emp['EMP ID']}","${emp['Last Name']}","${emp['First Name']}","${actv.title.replace(/^\d{2} - /, '').replace(/[\\\/]/g, '_')}"\r\n`);
-									}
-								} else {
-									actv.destinationPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Taleo Sync/Exceptions';
-									actv.isException = 1;
-									exceptions.push(actv);
-								}
-							}
-						});
+    winston.info('Getting ADP extract CSV in SpringCM', {
+      path: adpExtractPath
+    });
 
-						log(`${activities.length} form${activities.length === 1 ? '' : 's'} in ${packets.length} packet${packets.length === 1 ? '' : 's'} found for ${employee.id} - ${employee.firstName} ${employee.lastName}`);
+    springCm.getDocument(adpExtractPath, (err, doc) => {
+      if (err) {
+        return callback(err);
+      }
 
-						next(err);
-					});
-				}, (err) => {
-					callback(err, {
-						activities: activities,
-						exceptions: exceptions
-					});
-				});
-			});
-		}, (err, lists) => {
-			callback(err, lists);
-		});
-	},
-	// Flatten the 2D array of activities
-	(lists, callback) => {
-		var activities = [];
-		var exceptions = [];
+      adpExtract = doc;
+      callback();
+    });
+  },
+  (callback) => {
+    /**
+     * Log in to Taleo
+     */
 
-		lists.forEach((list) => {
-			// May be undefined if employee had no packets
-			if (list) {
-				list.activities.forEach((item) => {
-					activities = activities.concat(item);
-				});
+    var auth = _.get(conf, 'taleo-springcm-sync.taleo.auth');
 
-				list.exceptions.forEach((item) => {
-					exceptions = exceptions.concat(item);
-				});
-			}
-		});
+    winston.info('Connecting to Taleo', {
+      orgCode: auth.orgCode,
+      username: auth.username
+    });
 
-		log(`${activities.length} activities found in Taleo`);
-		log(`${exceptions.length} exceptions`);
-		log(`${exceptions.length + activities.length} total`);
+    client = new Taleo(auth);
 
-		callback(null, activities.concat(exceptions));
-	},
-	(activities, callback) => {
-		const lim = 10;
+    client.connect((err) => {
+      if (err) {
+        return callback(err);
+      }
 
-		async.filterLimit(activities, lim, (activity, callback) => {
-			seq.models.export.findOne({
-				where: {
-					'activity': activity.id
-				}
-			}).catch(callback).then((row) => {
-				if (row) {
-					callback(null, false);
-				} else {
-					callback(null, true);
-				}
-			});
-		}, (err, results) => {
-			if (err) {
-				return callback(err);
-			}
+      taleo = client;
 
-			log(`${results.length} total activities to sync to SpringCM`);
+      console.log('Auth token: ' + taleo.authToken);
 
-			// Pass results to load activities into SpringCM
-			// Pass empty array for testing
-			callback(null, results);
-		});
-	},
-	// Assign child processes a portion of the activities to sync to SpringCM
-	(activities, callback) => {
-		if (activities.length === 0 || true) {
-			log('No activities to upload');
-			return callback();
-		}
+      callback();
+    });
+  },
+  (callback) => {
+    /**
+     * Create a list of valid location IDs so we can filter employees to sync
+     */
 
-		sync(locationLookup, employeeLookup, activities, 18, seq, log, callback);
-	},
-	(callback) => {
-		Object.keys(lookupFiles).forEach((key) => {
-			lookupFiles[key].end();
-		});
+    validLocations = _.uniq(_.flatten(_.map(_.get(conf, 'taleo-springcm-sync.taleo.locations'), loc => loc.locationIds)));
 
-		callback();
-	},
-	(callback) => {
-		// Upload load files
-		async.eachSeries(locationInfo, (info, callback) => {
-			if (validCounts[info.name] < 1) {
-				log('Skipping upload of ' + info.name + '.csv; no files uploaded');
-				return callback();
-			}
+    callback();
+  },
+  (callback) => {
+    /**
+     * Create a queue that will process employees one at a time, uploading
+     * first any activities not already synchronized with SpringCM, then
+     * uploading employee attachments.
+     */
 
-			SpringCM.folder.path(`/PMH/Alta Hospitals/Human Resources/${info.name}/_Admin/Stria Deliveries`, (err, folder) => {
-				if (err) {
-					return callback(err);
-				}
+    var queue = async.queue((employee, callback) => {
+      const employeeName = `${employee.getFirstName()} ${employee.getLastName()}`;
 
-				SpringCM.folder.upload(folder, fs.createReadStream(path.join(__dirname, info.name + '.csv')), info.name + '.csv', null, (err) => {
-					if (err) {
-						log('Error while uploading load file ' + info.name + '.csv (might just be empty): ' + err);
-					} else {
-						log('Uploaded load file ' + info.name + '.csv');
-					}
+      async.waterfall([
+        (callback) => {
+          /**
+           * Verify the employee's information is in SpringCM, and is
+           * able to route. Any Taleo employees with invalid or missing SSNs
+           * are skipped.
+           */
 
-					fs.unlinkSync(path.join(__dirname, info.name + '.csv'));
-					callback();
-				});
-			});
-		}, (err) => {
-			if (err) {
-				return callback(err);
-			}
+          var employeeSsn = employee.getSsn();
 
-			callback();
-		});
-	}
+          // Skip if no SSN
+          if (!employeeSsn) {
+            return callback(new Error(`Missing SSN for Taleo employee ${employee.getId()}`));
+          }
+
+          // Filter out non-digits
+          employeeSsn = employeeSsn.replace(/[^\d]*/g, '');
+
+          // Skip if not a full-length SSN
+          if (employeeSsn.length !== 9) {
+            return callback(new Error(`Invalid SSN for Taleo employee ${employee.getId()}`));
+          }
+
+          // Do a lookup against the ADP extract in SpringCM for this employee
+          // by SSN.
+          springCm.csvLookup(adpExtract, {
+            'Social Security Number': employeeSsn
+          }, (err, rows) => {
+            if (err) {
+              return callback(err);
+            }
+
+            // We expect a single row to be returned
+            if (rows.length === 0) {
+              return callback(new Error(`Taleo employee ${employee.getId()} missing from ADP extract`));
+            } else if (rows.length !== 1) {
+              return callback(new Error(`Multiple rows in ADP extract for Taleo employee ${employee.getId()}`));
+            }
+
+            callback(null, rows[0]);
+          });
+        },
+        (adpEmployee, callback) => {
+          /**
+           * Get all packets for the employee, then retrieve all activities
+           * for each packet. Upload activities to SpringCM.
+           */
+
+          taleo.getPackets(employee, (err, packets) => {
+            if (err) {
+              return callback(err);
+            }
+
+            winston.info(`Found ${packets.length} packets for employee ${employee.getId()}`, {
+              packets: packets.map(p => p.getId()),
+              employeeId: employee.getId(),
+              employeeName: employeeName
+            });
+
+            // Get all activities for the packet
+            async.eachSeries(packets, (packet, callback) => {
+              taleo.getActivities(packet, (err, activities) => {
+                winston.info(`Found ${activities.length} activities for packet ${packet.getId()}`, {
+                  activities: activities.map(a => a.getId()),
+                  packet: packet.getId(),
+                  employeeId: employee.getId(),
+                  employeeName: employeeName
+                });
+
+                async.eachSeries(activities, (activity, callback) => {
+                  /**
+                   * For each activity, determine if the file has already
+                   * been uploaded. If an error occurs or the query times
+                   * out, skip the file. If not yet delivered, upload the
+                   * file to the to-file folder and index it so it routes.
+                   */
+
+                  // Pulled from config by lookup against PSID in Taleo
+                  var locationName;
+                  // SpringCM delivery folder
+                  var uploadFolder;
+
+                  // So we can exit the waterfall early if we have to
+                  var nextActivity = callback;
+
+                  async.waterfall([
+                    (callback) => {
+                      models.ActivityExport.findOne({
+                        where: {
+                          'activity': activity.getId()
+                        }
+                      }).then(actv => {
+                        if (actv) {
+                          winston.info(`Activity already delivered: ${activity.getId()}`, {
+                            activity: activity.getId(),
+                            packet: packet.getId(),
+                            employeeId: employee.getId(),
+                            employeeName: employeeName
+                          });
+
+                          return nextActivity();
+                        }
+
+                        callback();
+                      }).catch(callback);
+                    },
+                    (callback) => {
+                      /**
+                       * Map the employee's PSID in ADP to their location
+                       * name, for which we can retrieve the delivery folder.
+                       */
+
+                      var psid = _.get(adpEmployee, 'PSID');
+                      var locations = _.get(conf, 'taleo-springcm-sync.taleo.locations');
+                      var matches = _.filter(locations, loc => _.get(loc, 'psid') === psid);
+
+                      if (matches.length === 0) {
+                        return callback(new Error('No locations found for ADP PSID ' + psid));
+                      } else if (matches.length > 1) {
+                        return callback(new Error('Multiple locations found for ADP PSID ' + psid));
+                      }
+
+                      locationName = _.get(matches, '[0].name');
+
+                      callback();
+                    },
+                    (callback) => {
+                      /**
+                       * Determine the correct delivery folder
+                       */
+
+                      var folderPath = `/PMH/Alta Hospitals/Human Resources/${locationName}/_Documents_To_File`;
+
+                      springCm.getFolder(folderPath, (err, folder) => {
+                        if (err) {
+                          return callback(err);
+                        }
+
+                        uploadFolder = folder;
+
+                        callback();
+                      });
+                    },
+                    (callback) => {
+                      /**
+                       * Download the activity to a temp file
+                       */
+                      tmp.file((err, path, fd, cleanup) => {
+                        if (err) {
+                          return callback(err);
+                        }
+
+                        callback(null, path);
+                      });
+                    },
+                    (tmpPath, callback) => {
+                      taleo.downloadActivity(activity, fs.createWriteStream(tmpPath), (err) => {
+                        if (err) {
+                          return callback(err);
+                        }
+
+                        winston.info(`Downloaded activity ${activity.getId()} to ${tmpPath}`, {
+                          activity: activity.getId(),
+                          packet: packet.getId(),
+                          employeeId: employee.getId(),
+                          employeeName: employeeName,
+                          tmpPath: tmpPath
+                        });
+
+                        callback(null, tmpPath);
+                      });
+                    },
+                    (tmpPath, callback) => {
+                      springCm.uploadDocument(uploadFolder, fs.createReadStream(tmpPath), (err, doc) => {
+                        if (err) {
+                          return callback(err);
+                        }
+
+                        winston.info(`Uploaded activity ${activity.getId()} to SpringCM`, {
+                          activity: activity.getId(),
+                          packet: packet.getId(),
+                          employeeId: employee.getId(),
+                          employeeName: employeeName,
+                          remotePath: uploadFolder.getPath()
+                        });
+
+                        callback(null, doc);
+                      });
+                    },
+                    (doc, callback) => {
+                      /**
+                       * Index the uploaded document
+                       */
+
+                      if (locationName === 'Culver City') {
+                        springCm.setDocumentAttributes(doc, {
+                          'PMH Employee File - Culver City': {
+                            'Employee Information': {
+                              'Last Name': {
+                                'Value': _.get(adpEmployee, 'Last Name')
+                              },
+                              'First Name': {
+                                'Value': _.get(adpEmployee, 'First Name')
+                              },
+                              'EMP ID': {
+                                'Value': _.get(adpEmployee, 'EMP ID')
+                              }
+                            },
+                            'Document Information': {
+                              'Document Name': {
+                                'Value': activity.getTitle()
+                              }
+                            }
+                          }
+                        }, (err) => {
+                          if (err) {
+                            return callback(err);
+                          }
+
+                          winston.info(`Tagged activity ${activity.getId()}`, {
+                            activity: activity.getId(),
+                            packet: packet.getId(),
+                            employeeId: employee.getId(),
+                            employeeName: employeeName,
+                            attributeGroup: 'PMH Employee File - Culver City',
+                            adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                            documentName: activity.getTitle()
+                          });
+
+                          callback(null, doc);
+                        });
+                      } else {
+                        springCm.setDocumentAttributes(doc, {
+                          'PMH Employee File - Alta HR': {
+                            'Employee Information': {
+                              'Last Name': {
+                                'Value': _.get(adpEmployee, 'Last Name')
+                              },
+                              'First Name': {
+                                'Value': _.get(adpEmployee, 'First Name')
+                              },
+                              'EMP ID': {
+                                'Value': _.get(adpEmployee, 'EMP ID')
+                              }
+                            },
+                            'Document Information': {
+                              'Document Name': {
+                                'Value': activity.getTitle()
+                              }
+                            }
+                          }
+                        }, (err) => {
+                          if (err) {
+                            return callback(err);
+                          }
+
+                          winston.info(`Tagged activity ${activity.getId()}`, {
+                            activity: activity.getId(),
+                            packet: packet.getId(),
+                            employeeId: employee.getId(),
+                            employeeName: employeeName,
+                            attributeGroup: 'PMH Employee File - Alta HR',
+                            adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                            documentName: activity.getTitle()
+                          });
+
+                          callback(null, doc);
+                        });
+                      }
+                    },
+                    (doc, callback) => {
+                      models.ActivityExport.create({
+                        'activity': activity.getId(),
+                        'page_count': doc.getPageCount(),
+                        'activity_title': activity.getTitle(),
+                        'employee_id': activity.getEmployeeId(),
+                        'employee_name': employeeName,
+                        'exception_upload': 0
+                      }).then((row) => {
+                        winston.info(`Logged into database: activity ${activity.getId()}`, {
+                          activity: activity.getId(),
+                          packet: packet.getId(),
+                          employeeId: employee.getId(),
+                          employeeName: employeeName
+                        });
+
+                        callback();
+                      }).catch(callback);
+                    }
+                  ], (err) => {
+                    if (err) {
+                      winston.error(err.message, err);
+                    }
+
+                    callback();
+                  });
+                }, callback);
+              });
+            }, (err) => {
+              if (err) {
+                return callback(err);
+              }
+
+              callback(null, adpEmployee);
+            });
+          });
+        },
+        (adpEmployee, callback) => {
+          /**
+           * Get all attachments for the employee, then upload to SpringCM.
+           */
+
+          taleo.getAttachments(employee, (err, attachments) => {
+            if (err) {
+              return callback(err);
+            }
+
+            winston.info(`Found ${attachments.length} attachments for employee ${employee.getId()}`, {
+              attachments: attachments.map(a => a.getId()),
+              employeeId: employee.getId(),
+              employeeName: employeeName
+            });
+
+            async.eachSeries(attachments, (attachment, callback) => {
+              winston.info(`Attachment "${attachment.getDescription()}"`, {
+                title: attachment.getDescription(),
+                type: attachment.getAttachmentType(),
+                employeeId: employee.getId(),
+                employeeName: employeeName
+              });
+
+              var nextAttachment = callback;
+
+              var uploadFolder;
+              var locationName;
+
+              async.waterfall([
+                (callback) => {
+                  models.AttachmentExport.findOne({
+                    where: {
+                      'attachment': attachment.getId()
+                    }
+                  }).then(atch => {
+                    if (atch) {
+                      winston.info(`Attachment already delivered: ${attachment.getId()}`, {
+                        attachment: attachment.getId(),
+                        employeeId: employee.getId(),
+                        employeeName: employeeName
+                      });
+
+                      return nextAttachment();
+                    }
+
+                    callback();
+                  }).catch(callback);
+                },
+                (callback) => {
+                  /**
+                   * Map the employee's PSID in ADP to their location
+                   * name, for which we can retrieve the delivery folder.
+                   */
+
+                  var psid = _.get(adpEmployee, 'PSID');
+                  var locations = _.get(conf, 'taleo-springcm-sync.taleo.locations');
+                  var matches = _.filter(locations, loc => _.get(loc, 'psid') === psid);
+
+                  if (matches.length === 0) {
+                    return callback(new Error('No locations found for ADP PSID ' + psid));
+                  } else if (matches.length > 1) {
+                    return callback(new Error('Multiple locations found for ADP PSID ' + psid));
+                  }
+
+                  locationName = _.get(matches, '[0].name');
+
+                  callback();
+                },
+                (callback) => {
+                  /**
+                   * Determine the correct delivery folder
+                   */
+
+                  var folderPath = `/PMH/Alta Hospitals/Human Resources/${locationName}/_Documents_To_File`;
+
+                  springCm.getFolder(folderPath, (err, folder) => {
+                    if (err) {
+                      return callback(err);
+                    }
+
+                    uploadFolder = folder;
+
+                    callback();
+                  });
+                },
+                (callback) => {
+                  tmp.file((err, path, fd, cleanup) => {
+                    if (err) {
+                      return callback(err);
+                    }
+
+                    callback(null, path);
+                  });
+                },
+                (tmpPath, callback) => {
+                  taleo.downloadAttachment(attachment, fs.createWriteStream(tmpPath), (err) => {
+                    if (err) {
+                      return callback(err);
+                    }
+
+                    callback(null, tmpPath);
+                  });
+                },
+                (tmpPath, callback) => {
+                  springCm.uploadDocument(uploadFolder, fs.createReadStream(tmpPath), (err, doc) => {
+                    if (err) {
+                      return callback(err);
+                    }
+
+                    winston.info(`Uploaded attachment ${attachment.getId()} to SpringCM`, {
+                      attachment: attachment.getId(),
+                      employeeId: employee.getId(),
+                      employeeName: employeeName,
+                      remotePath: uploadFolder.getPath()
+                    });
+
+                    callback(null, doc);
+                  });
+                },
+                (doc, callback) => {
+                  var documentName;
+
+                  switch (attachment.getAttachmentType()) {
+                  case 'Resume_Type':
+                    documentName = 'Resume';
+                    break;
+                  case 'Offer_Type':
+                    documentName = 'Offer Letter';
+                    break;
+                  default:
+                    var desc = attachment.getDescription().toLowerCase();
+
+                    if (desc.indexOf('i-9') > -1 || desc.indexOf('i9') > -1) {
+                      documentName = 'I9';
+                    } else if (desc.indexOf('permanent residence card') > -1) {
+                      documentName = 'I9';
+                    } else if (desc.indexOf('passport') > -1) {
+                      documentName = 'I9';
+                    } else if (desc.indexOf('license') > -1 || desc.indexOf('licensure') > -1 || desc.indexOf('certificate') > -1) {
+                      documentName = 'License Certification and Education';
+                    } else if (desc.indexOf('primary source verification') > -1 || desc.indexOf('psv') > -1) {
+                      documentName = 'License Certification and Education';
+                    } else if (desc.indexOf('job description') > -1) {
+                      documentName = 'Job Descriptions and Evaluations';
+                    }
+                    break;
+                  }
+
+                  if (!documentName) {
+                    winston.info('Defaulting document name to "Personal Information - Other"', {
+                      attachment: attachment.getId(),
+                      employeeId: employee.getId(),
+                      employeeName: employeeName
+                    });
+
+                    documentName = 'Personal Information - Other';
+                  } else {
+                    winston.info(`Selected document name "${documentName}"`, {
+                      attachment: attachment.getId(),
+                      employeeId: employee.getId(),
+                      employeeName: employeeName,
+                      documentName: documentName
+                    });
+                  }
+
+                  if (locationName === 'Culver City') {
+                    springCm.setDocumentAttributes(doc, {
+                      'PMH Employee File - Culver City': {
+                        'Employee Information': {
+                          'Last Name': {
+                            'Value': _.get(adpEmployee, 'Last Name')
+                          },
+                          'First Name': {
+                            'Value': _.get(adpEmployee, 'First Name')
+                          },
+                          'EMP ID': {
+                            'Value': _.get(adpEmployee, 'EMP ID')
+                          }
+                        },
+                        'Document Information': {
+                          'Document Name': {
+                            'Value': documentName
+                          }
+                        }
+                      }
+                    }, (err) => {
+                      if (err) {
+                        return callback(err);
+                      }
+
+                      winston.info(`Tagged attachment ${attachment.getId()}`, {
+                        attachment: attachment.getId(),
+                        employeeId: employee.getId(),
+                        employeeName: employeeName,
+                        attributeGroup: 'PMH Employee File - Culver City',
+                        adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                        documentName: attachment.getDescription()
+                      });
+
+                      callback(null, doc);
+                    });
+                  } else {
+                    springCm.setDocumentAttributes(doc, {
+                      'PMH Employee File - Alta HR': {
+                        'Employee Information': {
+                          'Last Name': {
+                            'Value': _.get(adpEmployee, 'Last Name')
+                          },
+                          'First Name': {
+                            'Value': _.get(adpEmployee, 'First Name')
+                          },
+                          'EMP ID': {
+                            'Value': _.get(adpEmployee, 'EMP ID')
+                          }
+                        },
+                        'Document Information': {
+                          'Document Name': {
+                            'Value': documentName
+                          }
+                        }
+                      }
+                    }, (err) => {
+                      if (err) {
+                        return callback(err);
+                      }
+
+                      winston.info(`Tagged attachment ${attachment.getId()}`, {
+                        attachment: attachment.getId(),
+                        employeeId: employee.getId(),
+                        employeeName: employeeName,
+                        attributeGroup: 'PMH Employee File - Alta HR',
+                        adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                        documentName: attachment.getDescription()
+                      });
+
+                      callback(null, doc);
+                    });
+                  }
+                },
+                (doc, callback) => {
+                  models.AttachmentExport.create({
+                    'attachment': attachment.getId(),
+                    'page_count': doc.getPageCount(),
+                    'employee_id': employee.getId(),
+                    'attachment_description': attachment.getDescription(),
+                    'attachment_type': attachment.getAttachmentType(),
+                    'employee_name': employeeName,
+                    'exception_upload': 0
+                  }).then((row) => {
+                    winston.info(`Logged into database: attachment ${attachment.getId()}`, {
+                      attachment: attachment.getId(),
+                      employeeId: employee.getId(),
+                      employeeName: employeeName
+                    });
+
+                    callback();
+                  }).catch(callback);
+                }
+                // Check if already synced
+                // Download attachment
+                // Upload to routing folder
+                // Determine proper document title
+                // Index
+                // Record into database
+              ], callback);
+            }, callback);
+          });
+        }
+      ], (err) => {
+        if (err) {
+          winston.error(err.message, err);
+        }
+
+        callback();
+      });
+    });
+
+    // Pass queue on; employees will be enqueued as they are retrieved
+    callback(null, queue);
+  },
+  (queue, callback) => {
+    /**
+     * Begin retrieving employees from Taleo in pages, enqueueing up any
+     * employee at a valid location as we receive them.
+     */
+
+    var start = 200;
+    var length = 0;
+    const _max = 25; // For testing; 0 = no max
+    const limit = 25;
+
+    async.doUntil((callback) => {
+      taleo.getEmployees({
+        start: start,
+        limit: limit
+      }, (err, employees) => {
+        if (err) {
+          return callback(err);
+        }
+
+        length = employees.length;
+
+        if (length === 0) {
+          return callback();
+        }
+
+        if (length > 1) {
+          winston.info(`Queueing employees ${start} through ${start + length}`, {
+            start: start,
+            end: start + length,
+            count: length
+          });
+        } else if (length === 1) {
+          winston.info(`Queueing employee ${start}`, {
+            start: start,
+            count: 1
+          });
+        }
+
+        _.each(_.filter(employees, e => validLocations.indexOf(e.getLocation()) > -1), e => queue.push(e));
+
+        start += length;
+
+        callback();
+      });
+    }, () => {
+      return length === 0 || (_max > 0 && start > _max);
+    }, (err) => {
+      if (err) {
+        return callback(err);
+      }
+
+      if (queue.length() > 0 || queue.running() > 0) {
+        queue.drain = callback;
+      } else {
+        callback();
+      }
+    });
+  }
 ], (err) => {
-	if (err) {
-		log(err);
-	}
+  if (err) {
+    winston.error(err.message, err);
+  }
 
-	logfile.end();
+  // Close/log out of Taleo and SpringCM and disconnect from database
+  async.waterfall([
+    (callback) => {
+      if (springCm) {
+        winston.info('Disconnecting from SpringCM');
+        springCm.close(callback);
+      } else {
+        callback();
+      }
+    },
+    (callback) => {
+      if (taleo) {
+        winston.info('Disconnecting from Taleo');
+        taleo.close(callback);
+      } else {
+        callback();
+      }
+    },
+    (callback) => {
+      if (sequelize) {
+        sequelize.close().then(() => {
+          callback();
+        }).catch(callback);
+      } else {
+        callback();
+      }
+    }
+  ], (err) => {
+    var code = 0;
 
-	SpringCM.folder.path('/PMH/Alta Hospitals/Human Resources/_Admin/Taleo Sync/Logs', (err, folder) => {
-		if (err) {
-			return console.log(err);
-		}
+    if (err) {
+      winston.error(err.message, err);
+      code = 1;
+    }
 
-		SpringCM.folder.upload(folder, fs.createReadStream(logname), logname, null, (err) => {
-			if (err) {
-				return console.log(err);
-			}
-
-			fs.unlinkSync(logname);
-			process.exit(err ? 1 : 0);
-		});
-	});
+    // Wait for our winston transports to finish streaming data, then exit
+    async.parallel([
+      (callback) => fileTransport.on('finished', callback),
+      (callback) => consoleTransport.on('finished', callback),
+      (callback) => {
+        if (cwlTransport) {
+          cwlTransport.kthxbye(callback)
+        } else {
+          callback();
+        }
+      }
+    ], () => {
+      process.exit(code);
+    });
+  });
 });
