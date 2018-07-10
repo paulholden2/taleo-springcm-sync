@@ -205,7 +205,9 @@ async.waterfall([
 
       taleo = client;
 
-      console.log('Auth token: ' + taleo.authToken);
+      winston.info('Received auth_token from Taleo', {
+        authToken: taleo.authToken
+      });
 
       callback();
     });
