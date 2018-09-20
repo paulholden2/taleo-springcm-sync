@@ -675,15 +675,33 @@ async.waterfall([
 
                     if (desc.indexOf('i-9') > -1 || desc.indexOf('i9') > -1) {
                       documentName = 'I9';
-                    } else if (desc.indexOf('permanent residence card') > -1) {
+                    } else if (desc.indexOf('permanent residence card') > -1 || desc.indexOf('perm res') > -1) {
+                      documentName = 'I9';
+                    } else if (desc.indexOf('social security card') > -1) {
+                      documentName = 'I9';
+                    } else if (desc.indexOf('driver\'s license') > -1 || desc.indexOf('driver license') > -1) {
+                      documentName = 'I9';
+                    } else if (desc.indexOf('birth certificate') > -1 || desc.indexOf('birth cert') > -1) {
                       documentName = 'I9';
                     } else if (desc.indexOf('passport') > -1) {
                       documentName = 'I9';
+                    } else if (desc.indexOf('voided') > -1 || desc.indexOf('voided check') > -1) {
+                      documentName = 'Confidential';
+                    } else if (desc.indexOf('everify') > -1 || desc.indexOf('e-verify') > -1) {
+                      documentName = 'Confidential';
+                    } else if (desc.indexOf('healthcare') > -1 || desc.indexOf('health assessment') > -1 || desc.indexOf('health assess') > -1) {
+                      documentName = 'Confidential';
                     } else if (desc.indexOf('license') > -1 || desc.indexOf('licensure') > -1 || desc.indexOf('certificate') > -1) {
                       documentName = 'License Certification and Education';
                     } else if (desc.indexOf('primary source verification') > -1 || desc.indexOf('psv') > -1) {
                       documentName = 'License Certification and Education';
+                    } else if (desc.indexOf('masters') > -1 || desc.indexOf('bachelors') > -1 || desc.indexOf('education') > -1 || desc.indexOf('degree') > -1) {
+                      documentName = 'License Certification and Education';
+                    } else if (desc.indexOf('license') > -1 || desc.indexOf('cna') > -1 || desc.indexOf('bls') > -1 || desc.indexOf('acls') > -1 || desc.indexOf('cpt') > -1 || desc.indexOf('safety') > -1 || desc.indexOf('cpi') > -1) {
+                      documentName = 'License Certification and Education';
                     } else if (desc.indexOf('job description') > -1) {
+                      documentName = 'Job Descriptions and Evaluations';
+                    } else if (desc.indexOf('job desc') > -1) {
                       documentName = 'Job Descriptions and Evaluations';
                     }
                     break;
