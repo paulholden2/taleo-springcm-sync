@@ -506,7 +506,7 @@ async.waterfall([
                         'activity': activity.getId(),
                         'page_count': doc.getPageCount(),
                         'activity_title': activity.getTitle(),
-                        'employee_id': activity.getEmployeeId(),
+                        'employee_id': employee.getId(),
                         'employee_name': employeeName,
                         'exception_upload': 0
                       }).then((row) => {
