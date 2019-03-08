@@ -1,4 +1,5 @@
 *.caasrc
+*.caaspmsrc
 node_modules/*
 logs/*
 .env

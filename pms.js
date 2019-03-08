@@ -19,7 +19,285 @@ require('winston-daily-rotate-file');
 commander.version('0.1.0', '-v, --version');
 
 // TODO: When/if args  for database, taleo remote, etc. are added, use those as rc defaults
-var conf = rc('caas');
+var conf = rc('caaspms');
+
+function documentNameFor(name) {
+  switch (name) {
+  case '01 PMS Arbitration Agreement':
+    return 'Arbitration Agreement';
+  case '02 PMS Driving Policy':
+    return 'Driving Policy';
+  case '03 - I-9':
+    return 'I9';
+  case '03 PMS Telephone Policy':
+    return 'Company Issued Mobile Phone Policy';
+  case '04 PMS IIPP':
+    return 'IIPP';
+  case '05 - W-4':
+    return 'Tax Forms';
+  case 'Arbitration Agreement PMCA':
+    return 'Arbitration Agreement';
+  case 'At-Will Acknowledgment':
+    return 'At-Will Employment';
+  case 'At-Will Acknowledgment PMCA':
+    return 'At-Will Employment';
+  case 'Code of Bus. Cond. and Ethical Bus. Ack. Form':
+    return 'Code of Conduct';
+  case 'Criminal Sanctions Exclusion Attestation PMCA':
+    return 'Background Checks';
+  case 'Discrimination & Harassment CA –PMCA (PMS Clinics)':
+    return 'Unlawful Harassment';
+  case 'Discrimination and Harassment Policy - PMH PMS CRC':
+    return 'Unlawful Harassment';
+  case 'Driving Policy PMCA':
+    return 'Driving Policy';
+  case 'Employee Information Sheet':
+    return 'EE Info Sheet';
+  case 'FAMA Acknowledgement - PMS/PMCA':
+    return 'FAMA';
+  case 'Meal Period Waiver Agreement PMS_PMCA':
+    return 'Meal Period Waiver';
+  case 'MSO/IPA Compliance Program':
+    return 'MSO - IPA';
+  case 'PMCA - Employee Handbook Acknowledgement':
+    return 'Employee Handbook';
+  case 'PMCA - HIPAA CONFIDENTIALITY AGREEMENT (PHI)':
+    return 'HIPAA Agreement';
+  case 'PMCA Vehicle Registration Form':
+    return 'Vehicle Registration Form';
+  case 'PMH Confidentiality Agreement':
+    return 'Confidential Archive';
+  case 'PMH EE_Handbook_Acknowledgement':
+    return 'Employee Handbook';
+  case 'PMS - Employee Handbook Acknowledgement':
+    return 'Employee Handbook';
+  case 'PMS HIPAA CONFIDENTIALITY AGREEMENT (PHI)':
+    return 'HIPAA Agreement';
+  case 'PMS IIPP Acknowledgement':
+    return 'IIPP';
+  case 'PMS Onboarding Criminal Sanctions Exclusion Attest':
+    return 'Background Checks';
+  case 'PMS Vehicle Registration Form':
+    return 'Vehicle Registration Form';
+  case 'Prospect and Subsidaries Confidentiality Agreement':
+    return 'Confidential Archive';
+  case 'Prospect Confidentiality Agreement':
+    return 'Confidential Archive';
+  case 'Telephone Call Recording':
+    return 'Call Monitoring';
+  default:
+    return 'Other Docs';
+  }
+}
+
+function subcategoryFor(name) {
+  switch (name) {
+  case '1040 Form':
+  case 'Benefit Files':
+  case 'Benefit Files Archive':
+  case 'Benefits SCF':
+  case 'Birth Certificate':
+  case 'Enrollment':
+  case 'Family Status Change':
+  case 'Marriage License':
+  case 'New Hire Letter':
+  case 'No Change - Decline':
+  case 'Tobacco Declaration':
+  case 'Unum Cancellation':
+    return 'Benefit Files';
+  case 'EEOC':
+  case 'EEOC Archive':
+    return 'EEOC';
+  case 'Code of Conduct':
+  case 'Compliance Archive':
+  case 'MSO - IPA ':
+  case 'OIG - EPLS \'SAM\'':
+  case 'Training Acknowledgment':
+    return 'Compliance';
+  case 'Background Checks':
+  case 'Certs and Licenses':
+  case 'Confidential Archive':
+  case 'Employment Verification':
+  case 'Misc. Confidential':
+    return 'Confidential';
+  case 'Arbitration Agreement':
+  case 'At-Will Employment':
+  case 'Benefit Acknowledgment ':
+  case 'Call Monitoring':
+  case 'COD':
+  case 'Company Issued Mobile Phone Policy':
+  case 'Driving Policy':
+  case 'EE Info Sheet':
+  case 'Employee Confidentiality Agreement':
+  case 'Employee Handbook':
+  case 'Ergo Evaluation':
+  case 'HIPAA Agreement':
+  case 'IIPP':
+  case 'NDA Agreement':
+  case 'New Hire Checklist':
+  case 'Notice to Employee':
+  case 'Onboarding Archive':
+  case 'Prospect Medical Confidentiality Agreement':
+  case 'SYOD':
+  case 'Unlawful Harassment':
+  case 'Vehicle Registration Form':
+    return 'Onboarding';
+  case 'Internal Application':
+  case 'Other Archive':
+  case 'Other Docs':
+  case 'Safety Checklist':
+  case 'Teleworker Agreement':
+    return 'Other';
+  case 'Direct Deposit Forms':
+  case 'Tax Forms':
+    return 'Payroll';
+  case 'Counseling Forms':
+  case 'Performance Archive':
+  case 'Reviews and Evals':
+    return 'Performance';
+  case 'Application':
+  case 'Interviews and References':
+  case 'Job Description':
+  case 'Offer Letter':
+  case 'Pre-Employment Archive':
+  case 'References':
+  case 'Resume':
+  case 'Staffing Requisition ':
+  case 'Testing Results':
+    return 'Pre-Employment';
+  case 'SCF':
+  case 'Status Changes Archive':
+    return 'Status Changes';
+  case 'Term File':
+    return 'Term File';
+  case 'I9':
+  case 'I9 Archive':
+    return 'I9';
+  case 'ADA Letter':
+  case 'Doctor Notes':
+  case 'Exhausted FMLA':
+  case 'Extension':
+  case 'Initial Letter':
+  case 'Leave of Absence':
+  case 'Leave of Absence Archive':
+  case 'Medical Cert':
+  case 'Request':
+    return 'Leave of absence';
+  case 'Payroll':
+  case 'Payroll Archive':
+    return 'Payroll';
+  case 'Workers Compensation':
+  case 'Workers Compensation Archive':
+    return 'Workers Compensation';
+  default:
+    return 'Other';
+  }
+}
+
+function categoryFor(name) {
+  switch (name) {
+  case '1040 Form':
+  case 'Benefit Files':
+  case 'Benefit Files Archive':
+  case 'Benefits SCF':
+  case 'Birth Certificate':
+  case 'Enrollment':
+  case 'Family Status Change':
+  case 'Marriage License':
+  case 'New Hire Letter':
+  case 'No Change - Decline':
+  case 'Tobacco Declaration':
+  case 'Unum Cancellation':
+    return 'Benefit Files';
+  case 'EEOC':
+  case 'EEOC Archive':
+    return 'EEOC';
+  case 'Code of Conduct':
+  case 'Compliance Archive':
+  case 'MSO - IPA ':
+  case 'OIG - EPLS \'SAM\'':
+  case 'Training Acknowledgment':
+    return 'Employee Files';
+  case 'Background Checks':
+  case 'Certs and Licenses':
+  case 'Confidential Archive':
+  case 'Employment Verification':
+  case 'Misc. Confidential':
+    return 'Employee Files';
+  case 'Arbitration Agreement':
+  case 'At-Will Employment':
+  case 'Benefit Acknowledgment ':
+  case 'Call Monitoring':
+  case 'COD':
+  case 'Company Issued Mobile Phone Policy':
+  case 'Driving Policy':
+  case 'EE Info Sheet':
+  case 'Employee Confidentiality Agreement':
+  case 'Employee Handbook':
+  case 'Ergo Evaluation':
+  case 'HIPAA Agreement':
+  case 'IIPP':
+  case 'NDA Agreement':
+  case 'New Hire Checklist':
+  case 'Notice to Employee':
+  case 'Onboarding Archive':
+  case 'Prospect Medical Confidentiality Agreement':
+  case 'SYOD':
+  case 'Unlawful Harassment':
+  case 'Vehicle Registration Form':
+    return 'Employee Files';
+  case 'Internal Application':
+  case 'Other Archive':
+  case 'Other Docs':
+  case 'Safety Checklist':
+  case 'Teleworker Agreement':
+    return 'Employee Files';
+  case 'Direct Deposit Forms':
+  case 'Tax Forms':
+    return 'Employee Files';
+  case 'Counseling Forms':
+  case 'Performance Archive':
+  case 'Reviews and Evals':
+    return 'Employee Files';
+  case 'Application':
+  case 'Interviews and References':
+  case 'Job Description':
+  case 'Offer Letter':
+  case 'Pre-Employment Archive':
+  case 'References':
+  case 'Resume':
+  case 'Staffing Requisition ':
+  case 'Testing Results':
+    return 'Employee Files';
+  case 'SCF':
+  case 'Status Changes Archive':
+    return 'Employee Files';
+  case 'Term File':
+    return 'Employee Files';
+  case 'I9':
+  case 'I9 Archive':
+    return 'I9';
+  case 'ADA Letter':
+  case 'Doctor Notes':
+  case 'Exhausted FMLA':
+  case 'Extension':
+  case 'Initial Letter':
+  case 'Leave of Absence':
+  case 'Leave of Absence Archive':
+  case 'Medical Cert':
+  case 'Request':
+    return 'Leave of Absence';
+  case 'Payroll':
+  case 'Payroll Archive':
+    return 'Payroll';
+  case 'Workers Compensation':
+  case 'Workers Compensation Archive':
+    return 'Workers Compensation';
+  default:
+    return 'Employee Files';
+  }
+}
+
 
 /**
  * Some objects we'll want easy access to:
@@ -174,7 +452,7 @@ async.waterfall([
      * Get ADP extract in SpringCM
      */
 
-    var adpExtractPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Employee Information.csv';
+    var adpExtractPath = '/HR/_Admin - HR/Prospect Employee List.csv';
 
     winston.info('Getting ADP extract CSV in SpringCM', {
       path: adpExtractPath
@@ -286,7 +564,7 @@ async.waterfall([
           // Do a lookup against the ADP extract in SpringCM for this employee
           // by SSN.
           springCm.csvLookup(adpExtract, {
-            'Social Security Number': employeeSsn
+            'SSN': employeeSsn
           }, (err, rows) => {
             if (err) {
               return callback(err);
@@ -346,10 +624,6 @@ async.waterfall([
             // Get all activities for the packet
             async.eachSeries(packets, (packet, callback) => {
               taleo.getActivities(packet, (err, activities) => {
-                if (err) {
-                  return callback(err);
-                }
-
                 winston.info(`Found ${activities.length} activities for packet ${packet.getId()}`, {
                   activities: activities.map(a => a.getId()),
                   packet: packet.getId(),
@@ -392,34 +666,17 @@ async.waterfall([
                         }
 
                         callback();
-                      }).catch(callback);
-                    },
-                    (callback) => {
-                      /**
-                       * Map the employee's PSID in ADP to their location
-                       * name, for which we can retrieve the delivery folder.
-                       */
-
-                      var psid = _.get(adpEmployee, 'PSID');
-                      var locations = _.get(conf, 'taleo-springcm-sync.taleo.locations');
-                      var matches = _.filter(locations, loc => _.get(loc, 'psid').toLowerCase() === psid.toLowerCase());
-
-                      if (matches.length === 0) {
-                        return callback(new Error('No locations found for ADP PSID ' + psid));
-                      } else if (matches.length > 1) {
-                        return callback(new Error('Multiple locations found for ADP PSID ' + psid));
-                      }
-
-                      locationName = _.get(matches, '[0].name');
-
-                      callback();
+                      }).catch((err) => {
+                        console.log(err);
+                        return nextActivity();
+                      });
                     },
                     (callback) => {
                       /**
                        * Determine the correct delivery folder
                        */
 
-                      var folderPath = `/PMH/Alta Hospitals/Human Resources/${locationName}/_Documents_To_File`;
+                      var folderPath = '/Admin/Delivery Automation/JIT Deliveries/Human Resources/';
 
                       springCm.getFolder(folderPath, (err, folder) => {
                         if (err) {
@@ -478,85 +735,76 @@ async.waterfall([
                       });
                     },
                     (doc, callback) => {
+                      var documentName = documentNameFor(activity.getTitle());
                       /**
                        * Index the uploaded document
                        */
-
-                      if (locationName === 'Culver City') {
-                        springCm.setDocumentAttributes(doc, {
-                          'PMH Employee File - Culver City': {
-                            'Employee Information': {
-                              'Last Name': {
-                                'Value': _.get(adpEmployee, 'Last Name')
-                              },
-                              'First Name': {
-                                'Value': _.get(adpEmployee, 'First Name')
-                              },
-                              'EMP ID': {
-                                'Value': _.get(adpEmployee, 'EMP ID')
-                              }
+                      springCm.setDocumentAttributes(doc, {
+                        'Employee Files': {
+                          'Employee Data': {
+                            'Last Name': {
+                              'Value': _.get(adpEmployee, 'Last Name')
                             },
-                            'Document Information': {
-                              'Document Name': {
-                                'Value': activity.getTitle()
-                              }
+                            'First Name': {
+                              'Value': _.get(adpEmployee, 'First Name')
+                            },
+                            'SSN': {
+                              'Value': _.get(adpEmployee, 'SSN')
+                            },
+                            'SSN (Last 4)': {
+                              'Value': _.get(adpEmployee, 'SSN (Last 4)')
+                            },
+                            'Company Code': {
+                              'Value': _.get(adpEmployee, 'Company Code')
+                            },
+                            'Department Code': {
+                              'value': _.get(adpEmployee, 'Department Code')
+                            },
+                            'Department Name': {
+                              'value': _.get(adpEmployee, 'Department Name')
+                            },
+                            'Status': {
+                              'value': _.get(adpEmployee, 'Status')
+                            },
+                            'Location': {
+                              'value': _.get(adpEmployee, 'Location')
+                            },
+                            'Hire Date': {
+                              'value': _.get(adpEmployee, 'Hire Date')
+                            },
+                            'Termination Date': {
+                              'value': _.get(adpEmployee, 'Termination Date')
+                            }
+                          },
+                          'Category': {
+                            'Document Name': {
+                              'Value': documentName,
+                            },
+                            'SubCategory': {
+                              'Value': subcategoryFor(documentName)
+                            },
+                            'Category': {
+                              'Value': categoryFor(documentName)
                             }
                           }
-                        }, (err) => {
-                          if (err) {
-                            return callback(err);
-                          }
+                        }
+                      }, (err) => {
+                        if (err) {
+                          return callback(err);
+                        }
 
-                          winston.info(`Tagged activity ${activity.getId()}`, {
-                            activity: activity.getId(),
-                            packet: packet.getId(),
-                            employeeId: employee.getId(),
-                            employeeName: employeeName,
-                            attributeGroup: 'PMH Employee File - Culver City',
-                            adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
-                            documentName: activity.getTitle()
-                          });
-
-                          callback(null, doc);
+                        winston.info(`Tagged activity ${activity.getId()}`, {
+                          activity: activity.getId(),
+                          packet: packet.getId(),
+                          employeeId: employee.getId(),
+                          employeeName: employeeName,
+                          attributeGroup: 'Employee Files',
+                          adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                          documentName: activity.getTitle()
                         });
-                      } else {
-                        springCm.setDocumentAttributes(doc, {
-                          'PMH Employee File - Alta HR': {
-                            'Employee Information': {
-                              'Last Name': {
-                                'Value': _.get(adpEmployee, 'Last Name')
-                              },
-                              'First Name': {
-                                'Value': _.get(adpEmployee, 'First Name')
-                              },
-                              'EMP ID': {
-                                'Value': _.get(adpEmployee, 'EMP ID')
-                              }
-                            },
-                            'Document Information': {
-                              'Document Name': {
-                                'Value': activity.getTitle()
-                              }
-                            }
-                          }
-                        }, (err) => {
-                          if (err) {
-                            return callback(err);
-                          }
 
-                          winston.info(`Tagged activity ${activity.getId()}`, {
-                            activity: activity.getId(),
-                            packet: packet.getId(),
-                            employeeId: employee.getId(),
-                            employeeName: employeeName,
-                            attributeGroup: 'PMH Employee File - Alta HR',
-                            adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
-                            documentName: activity.getTitle()
-                          });
-
-                          callback(null, doc);
-                        });
-                      }
+                        callback(null, doc);
+                      });
                     },
                     (doc, callback) => {
                       models.ActivityExport.create({
@@ -646,30 +894,10 @@ async.waterfall([
                 },
                 (callback) => {
                   /**
-                   * Map the employee's PSID in ADP to their location
-                   * name, for which we can retrieve the delivery folder.
-                   */
-
-                  var psid = _.get(adpEmployee, 'PSID');
-                  var locations = _.get(conf, 'taleo-springcm-sync.taleo.locations');
-                  var matches = _.filter(locations, loc => _.get(loc, 'psid') === psid);
-
-                  if (matches.length === 0) {
-                    return callback(new Error('No locations found for ADP PSID ' + psid));
-                  } else if (matches.length > 1) {
-                    return callback(new Error('Multiple locations found for ADP PSID ' + psid));
-                  }
-
-                  locationName = _.get(matches, '[0].name');
-
-                  callback();
-                },
-                (callback) => {
-                  /**
                    * Determine the correct delivery folder
                    */
 
-                  var folderPath = `/PMH/Alta Hospitals/Human Resources/${locationName}/_Documents_To_File`;
+                  var folderPath = '/Admin/Delivery Automation/JIT Deliveries/Human Resources';
 
                   springCm.getFolder(folderPath, (err, folder) => {
                     if (err) {
@@ -742,36 +970,82 @@ async.waterfall([
                       documentName = 'I9';
                     } else if (desc.indexOf('passport') > -1) {
                       documentName = 'I9';
-                    } else if (desc.indexOf('voided') > -1 || desc.indexOf('voided check') > -1) {
-                      documentName = 'Confidential';
-                    } else if (desc.indexOf('everify') > -1 || desc.indexOf('e-verify') > -1) {
-                      documentName = 'Confidential';
-                    } else if (desc.indexOf('healthcare') > -1 || desc.indexOf('health assessment') > -1 || desc.indexOf('health assess') > -1) {
-                      documentName = 'Confidential';
-                    } else if (desc.indexOf('license') > -1 || desc.indexOf('licensure') > -1 || desc.indexOf('certificate') > -1) {
-                      documentName = 'License Certification and Education';
-                    } else if (desc.indexOf('primary source verification') > -1 || desc.indexOf('psv') > -1) {
-                      documentName = 'License Certification and Education';
-                    } else if (desc.indexOf('masters') > -1 || desc.indexOf('bachelors') > -1 || desc.indexOf('education') > -1 || desc.indexOf('degree') > -1) {
-                      documentName = 'License Certification and Education';
-                    } else if (desc.indexOf('license') > -1 || desc.indexOf('cna') > -1 || desc.indexOf('bls') > -1 || desc.indexOf('acls') > -1 || desc.indexOf('cpt') > -1 || desc.indexOf('safety') > -1 || desc.indexOf('cpi') > -1) {
-                      documentName = 'License Certification and Education';
-                    } else if (desc.indexOf('job description') > -1) {
-                      documentName = 'Job Descriptions and Evaluations';
-                    } else if (desc.indexOf('job desc') > -1) {
-                      documentName = 'Job Descriptions and Evaluations';
+                    } else if (desc.indexOf('offer letter') > -1) {
+                      documentName = 'Offer Letter';
+                    } else if (desc.indexOf('Offer letter') > -1) {
+                      documentName = 'Offer Letter';
+                    } else if (desc.indexOf('voided check') > -1) {
+                      documentName = 'Direct Deposit Forms';
+                    } else if (desc.indexOf('direct deposit') > -1) {
+                      documentName = 'Direct Deposit Forms';
+                    } else if (desc.indexOf('rn') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('cna') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('license') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('psv') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('sv') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('bls') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('acls') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('sama') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('mab') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('fire') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('ekg') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('cpt') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('safety') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('aha') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('pals') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('cpi') > -1) {
+                      documentName = 'Certs and Licenses';
+                    } else if (desc.indexOf('e-verify') > -1) {
+                      documentName = 'Confidential Archive';
+                    } else if (desc.indexOf('everify') > -1) {
+                      documentName = 'Confidential Archive';
+                    } else if (desc.indexOf('resume') > -1) {
+                      documentName = 'Resume';
+                    } else if (desc.indexOf('healthcare') > -1) {
+                      documentName = 'Confidential Archive';
+                    } else if (desc.indexOf('assessment') > -1) {
+                      documentName = 'Confidential Archive';
+                    } else if (desc.indexOf('source') > -1) {
+                      documentName = 'Confidential Archive';
+                    } else if (desc.indexOf('report') > -1) {
+                      documentName = 'Confidential Archive';
+                    } else if (desc.indexOf('selection') > -1) {
+                      documentName = 'Confidential Archive';
+                    } else if (desc.indexOf('scf') > -1) {
+                      documentName = 'SCF';
+                    } else if (desc.indexOf('recommend') > -1) {
+                      documentName = 'Resume';
+                    } else if (desc.indexOf('recommendation') > -1) {
+                      documentName = 'Resume';
+                    } else if (desc.indexOf('telephone call recording') > -1) {
+                      documentName = 'Call Monitoring';
                     }
                     break;
                   }
 
                   if (!documentName) {
-                    winston.info('Defaulting document name to "Personal Information - Other"', {
+                    winston.info('Defaulting document name to "Other Docs"', {
                       attachment: attachment.getId(),
                       employeeId: employee.getId(),
                       employeeName: employeeName
                     });
 
-                    documentName = 'Personal Information - Other';
+                    documentName = 'Other Docs';
                   } else {
                     winston.info(`Selected document name "${documentName}"`, {
                       attachment: attachment.getId(),
@@ -781,79 +1055,71 @@ async.waterfall([
                     });
                   }
 
-                  if (locationName === 'Culver City') {
-                    springCm.setDocumentAttributes(doc, {
-                      'PMH Employee File - Culver City': {
-                        'Employee Information': {
-                          'Last Name': {
-                            'Value': _.get(adpEmployee, 'Last Name')
-                          },
-                          'First Name': {
-                            'Value': _.get(adpEmployee, 'First Name')
-                          },
-                          'EMP ID': {
-                            'Value': _.get(adpEmployee, 'EMP ID')
-                          }
+                  springCm.setDocumentAttributes(doc, {
+                    'Employee Files': {
+                      'Employee Data': {
+                        'Last Name': {
+                          'Value': _.get(adpEmployee, 'Last Name')
                         },
-                        'Document Information': {
-                          'Document Name': {
-                            'Value': documentName
-                          }
+                        'First Name': {
+                          'Value': _.get(adpEmployee, 'First Name')
+                        },
+                        'SSN': {
+                          'Value': _.get(adpEmployee, 'SSN')
+                        },
+                        'SSN (Last 4)': {
+                          'Value': _.get(adpEmployee, 'SSN (Last 4)')
+                        },
+                        'Company Code': {
+                          'Value': _.get(adpEmployee, 'Company Code')
+                        },
+                        'Department Code': {
+                          'value': _.get(adpEmployee, 'Department Code')
+                        },
+                        'Department Name': {
+                          'value': _.get(adpEmployee, 'Department Name')
+                        },
+                        'Status': {
+                          'value': _.get(adpEmployee, 'Status')
+                        },
+                        'Location': {
+                          'value': _.get(adpEmployee, 'Location')
+                        },
+                        'Hire Date': {
+                          'value': _.get(adpEmployee, 'Hire Date')
+                        },
+                        'Termination Date': {
+                          'value': _.get(adpEmployee, 'Termination Date')
+                        }
+                      },
+                      'Category': {
+                        'Document Name': {
+                          'Value': documentName
+                        },
+                        'SubCategory': {
+                          'Value': subcategoryFor(documentName)
+                        },
+                        'Category': {
+                          'Value': categoryFor(documentName)
                         }
                       }
-                    }, (err) => {
-                      if (err) {
-                        return callback(err);
-                      }
+                    }
+                  }, (err) => {
+                    if (err) {
+                      return callback(err);
+                    }
 
-                      winston.info(`Tagged attachment ${attachment.getId()}`, {
-                        attachment: attachment.getId(),
-                        employeeId: employee.getId(),
-                        employeeName: employeeName,
-                        attributeGroup: 'PMH Employee File - Culver City',
-                        adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
-                        documentName: attachment.getDescription()
-                      });
-
-                      callback(null, doc);
+                    winston.info(`Tagged attachment ${attachment.getId()}`, {
+                      attachment: attachment.getId(),
+                      employeeId: employee.getId(),
+                      employeeName: employeeName,
+                      attributeGroup: 'Employee Files',
+                      adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
+                      documentName: attachment.getDescription()
                     });
-                  } else {
-                    springCm.setDocumentAttributes(doc, {
-                      'PMH Employee File - Alta HR': {
-                        'Employee Information': {
-                          'Last Name': {
-                            'Value': _.get(adpEmployee, 'Last Name')
-                          },
-                          'First Name': {
-                            'Value': _.get(adpEmployee, 'First Name')
-                          },
-                          'EMP ID': {
-                            'Value': _.get(adpEmployee, 'EMP ID')
-                          }
-                        },
-                        'Document Information': {
-                          'Document Name': {
-                            'Value': documentName
-                          }
-                        }
-                      }
-                    }, (err) => {
-                      if (err) {
-                        return callback(err);
-                      }
 
-                      winston.info(`Tagged attachment ${attachment.getId()}`, {
-                        attachment: attachment.getId(),
-                        employeeId: employee.getId(),
-                        employeeName: employeeName,
-                        attributeGroup: 'PMH Employee File - Alta HR',
-                        adpEmployeeId: _.get(adpEmployee, 'EMP ID'),
-                        documentName: attachment.getDescription()
-                      });
-
-                      callback(null, doc);
-                    });
-                  }
+                    callback(null, doc);
+                  });
                 },
                 (doc, callback) => {
                   models.AttachmentExport.create({
@@ -936,7 +1202,14 @@ async.waterfall([
           });
         }
 
-        _.each(_.filter(employees, e => validLocations.indexOf(e.getLocation()) > -1), e => queue.push(e));
+        var matches = 0;
+
+        _.each(_.filter(employees, e => validLocations.indexOf(e.getLocation()) > -1), e => {
+          matches += 1;
+          queue.push(e);
+        });
+
+        winston.info(`${matches} matching employees queued`);
 
         start += length;
 
@@ -957,15 +1230,15 @@ async.waterfall([
     });
   },
   (callback) => {
-    fs.writeFile('./Alta Taleo Exceptions.csv', csvjson.toCSV(exceptionData, {
+    fs.writeFile('./PMS-PMH Taleo Exceptions.csv', csvjson.toCSV(exceptionData, {
       delimiter: ',',
       headers: 'key'
     }), callback);
   },
   (callback) => {
-    var docPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Taleo Sync/Alta Taleo Exceptions.csv';
-    springCm.checkInDocument(docPath, fs.createReadStream('./Alta Taleo Exceptions.csv'), {
-      filename: 'Alta Taleo Exceptions.csv'
+    var docPath = '/HR/_Admin - HR/PMS-PMH Taleo Exceptions.csv';
+    springCm.checkInDocument(docPath, fs.createReadStream('./PMS-PMH Taleo Exceptions.csv'), {
+      filename: 'PMS-PMH Taleo Exceptions.csv'
     }, callback);
   }
 ], (err) => {
