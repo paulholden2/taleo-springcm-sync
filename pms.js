@@ -1236,7 +1236,7 @@ async.waterfall([
     }), callback);
   },
   (callback) => {
-    var docPath = '/HR/_Admin - HR/PMS-PMH Taleo Exceptions.csv';
+    var docPath = '/HR/_Admin - HR/Taleo Sync/PMS-PMH Taleo Exceptions.csv';
     springCm.checkInDocument(docPath, fs.createReadStream('./PMS-PMH Taleo Exceptions.csv'), {
       filename: 'PMS-PMH Taleo Exceptions.csv'
     }, callback);
