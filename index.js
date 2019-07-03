@@ -238,55 +238,16 @@ async.waterfall([
 
       async.waterfall([
         (callback) => {
-          /**
-           * Verify the employee's information is in SpringCM, and is
-           * able to route. Any Taleo employees with invalid or missing SSNs
-           * are skipped.
-           */
-
-          var employeeSsn = employee.getSsn();
+          var eeid = employee.obj.EEID;
 
           // Skip if no SSN
-          if (!employeeSsn) {
-            exceptionData.push({
-              'SSN Status': 'Missing',
-              'HRIS Extract Status': 'N/A',
-              'Department ID': employee.getDepartment(),
-              'Department Code': department.codeFor(employee.getDepartment()),
-              'Department Name': department.nameFor(employee.getDepartment()),
-              'Status': status.nameFor(employee.obj.employee.status),
-              'Employee ID': employee.getId(),
-              'Employee Last Name': employee.getLastName(),
-              'Employee First Name': employee.getFirstName(),
-              'Employee Creation Date': employee.obj.employee.creationDate
-            });
-            return callback(new Error(`Missing SSN for Taleo employee ${employee.getId()}`));
+          if (!eeid || eeid === '') {
+            return callback(new Error(`Missing EEID for Taleo employee ${employee.getId()}`));
           }
-
-          // Filter out non-digits
-          employeeSsn = employeeSsn.replace(/[^\d]*/g, '');
-
-          // Skip if not a full-length SSN
-          if (employeeSsn.length !== 9) {
-            exceptionData.push({
-              'SSN Status': 'Invalid',
-              'HRIS Extract Status': 'N/A',
-              'Department ID': employee.getDepartment(),
-              'Department Code': department.codeFor(employee.getDepartment()),
-              'Department Name': department.nameFor(employee.getDepartment()),
-              'Status': status.nameFor(employee.obj.employee.status),
-              'Employee ID': employee.getId(),
-              'Employee Last Name': employee.getLastName(),
-              'Employee First Name': employee.getFirstName(),
-              'Employee Creation Date': employee.obj.employee.creationDate
-            });
-            return callback(new Error(`Invalid SSN for Taleo employee ${employee.getId()}`));
-          }
-
           // Do a lookup against the ADP extract in SpringCM for this employee
           // by SSN.
           springCm.csvLookup(adpExtract, {
-            'Social Security Number': employeeSsn
+            'EMP ID': eeid
           }, (err, rows) => {
             if (err) {
               return callback(err);
@@ -294,32 +255,8 @@ async.waterfall([
 
             // We expect a single row to be returned
             if (rows.length === 0) {
-              exceptionData.push({
-                'SSN Status': 'Valid',
-                'HRIS Extract Status': 'Missing',
-                'Department ID': employee.getDepartment(),
-                'Department Code': department.codeFor(employee.getDepartment()),
-                'Department Name': department.nameFor(employee.getDepartment()),
-                'Status': status.nameFor(employee.obj.employee.status),
-                'Employee ID': employee.getId(),
-                'Employee Last Name': employee.getLastName(),
-                'Employee First Name': employee.getFirstName(),
-                'Employee Creation Date': employee.obj.employee.creationDate
-              });
               return callback(new Error(`Taleo employee ${employee.getId()} missing from ADP extract`));
             } else if (rows.length !== 1) {
-              exceptionData.push({
-                'SSN Status': 'Valid',
-                'HRIS Extract Status': 'Multiple',
-                'Department ID': employee.getDepartment(),
-                'Department Code': department.codeFor(employee.getDepartment()),
-                'Department Name': department.nameFor(employee.getDepartment()),
-                'Status': status.nameFor(employee.obj.employee.status),
-                'Employee ID': employee.getId(),
-                'Employee Last Name': employee.getLastName(),
-                'Employee First Name': employee.getFirstName(),
-                'Employee Creation Date': employee.obj.employee.creationDate
-              });
               return callback(new Error(`Multiple rows in ADP extract for Taleo employee ${employee.getId()}`));
             }
 
@@ -936,7 +873,28 @@ async.waterfall([
           });
         }
 
-        _.each(_.filter(employees, e => validLocations.indexOf(e.getLocation()) > -1), e => queue.push(e));
+        _.each(_.filter(employees, e => {
+          if (validLocations.indexOf(e.getLocation()) < 0) {
+            return false;
+          }
+
+          if (e.obj.EEID === "") {
+            winston.info(`Skipping employee ${e.getId()} (missing EEID)`);
+            return false;
+          }
+
+          if (e.obj.startDate == null) {
+            winston.info(`Skipping employee ${e.getId()} (no start date)`);
+            return false;
+          }
+
+          if (e.obj.onBoardStatus !== 4) {
+            winston.info(`Skipping employee ${e.getId()} (onboarding not complete)`);
+            return false;
+          }
+
+          return true;
+        }), e => queue.push(e));
 
         start += length;
 
@@ -957,12 +915,16 @@ async.waterfall([
     });
   },
   (callback) => {
+    // Skip
+    return callback();
     fs.writeFile('./Alta Taleo Exceptions.csv', csvjson.toCSV(exceptionData, {
       delimiter: ',',
       headers: 'key'
     }), callback);
   },
   (callback) => {
+    // Skip
+    return callback();
     var docPath = '/PMH/Alta Hospitals/Human Resources/_Admin/Taleo Sync/Alta Taleo Exceptions.csv';
     springCm.checkInDocument(docPath, fs.createReadStream('./Alta Taleo Exceptions.csv'), {
       filename: 'Alta Taleo Exceptions.csv'
