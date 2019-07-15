@@ -878,17 +878,24 @@ async.waterfall([
             return false;
           }
 
-          if (e.obj.EEID === "") {
+          var obj = e.obj.employee;
+
+          if (`${obj.status}` !== '1') {
+            winston.info(`Skipping employee ${e.getId()} (not employed)`);
+            return false;
+          }
+
+          if (obj.EEID === "") {
             winston.info(`Skipping employee ${e.getId()} (missing EEID)`);
             return false;
           }
 
-          if (e.obj.startDate == null) {
+          if (typeof(obj.startDate) !== 'string') {
             winston.info(`Skipping employee ${e.getId()} (no start date)`);
             return false;
           }
 
-          if (e.obj.onBoardStatus !== 4) {
+          if (`${obj.onBoardStatus}` !== '4') {
             winston.info(`Skipping employee ${e.getId()} (onboarding not complete)`);
             return false;
           }
