@@ -238,7 +238,7 @@ async.waterfall([
 
       async.waterfall([
         (callback) => {
-          var eeid = employee.obj.EEID;
+          var eeid = employee.obj.employee.EEID;
 
           // Skip if no SSN
           if (!eeid || eeid === '') {
@@ -842,7 +842,7 @@ async.waterfall([
     var start = 1;
     var length = 0;
     const _max = 0; // For testing; 0 = no max
-    const limit = 25;
+    const limit = 100;
 
     async.doUntil((callback) => {
       taleo.getEmployees({
@@ -880,7 +880,7 @@ async.waterfall([
 
           var obj = e.obj.employee;
 
-          if (`${obj.status}` !== '1') {
+          if (obj.status !== 1) {
             winston.info(`Skipping employee ${e.getId()} (not employed)`);
             return false;
           }
@@ -895,7 +895,7 @@ async.waterfall([
             return false;
           }
 
-          if (`${obj.onBoardStatus}` !== '4') {
+          if (obj.onBoardStatus !== 4) {
             winston.info(`Skipping employee ${e.getId()} (onboarding not complete)`);
             return false;
           }
@@ -913,6 +913,8 @@ async.waterfall([
       if (err) {
         return callback(err);
       }
+
+      console.log(`${queue.length()} in queue`);
 
       if (queue.length() > 0 || queue.running() > 0) {
         queue.drain = callback;
