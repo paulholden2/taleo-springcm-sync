@@ -33,7 +33,7 @@
     "dotenv": "^5.0.1",
     "lodash": "^4.17.19",
     "rc": "^1.2.8",
-    "sequelize": "^4.39.0",
+    "sequelize": "^5.15.1",
     "springcm-node-sdk": "^1.7.1",
     "taleo-node-sdk": "^0.6.1",
     "tedious": "^2.6.4",
